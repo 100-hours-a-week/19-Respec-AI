@@ -3,9 +3,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import json
 import numpy as np
 from tqdm import tqdm
+import hashlib
+import time
+import redis
+from functools import lru_cache
 
 class SpecEvaluator:
-    def __init__(self):
+    def __init__(self, use_redis=True, redis_host="localhost", redis_port=6379, redis_db=0, cache_ttl=86400):
         print("XGLM-564M 모델 로딩 중...")
         # XGLM-564M 모델 로드
         self.model_name = "facebook/xglm-564M"
@@ -16,6 +20,34 @@ class SpecEvaluator:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"사용 중인 디바이스: {self.device}")
         self.model.to(self.device)
+        
+        # KV 캐시 설정
+        self.use_kv_cache = True  # 모델의 KV 캐시 사용 여부
+        
+        # 외부 결과 캐싱 설정
+        self.use_redis = use_redis
+        self.cache_ttl = cache_ttl  # 캐시 유효 기간 (초)
+        
+        # Redis 클라이언트 초기화
+        if self.use_redis:
+            try:
+                self.redis_client = redis.Redis(
+                    host=redis_host,
+                    port=redis_port,
+                    db=redis_db,
+                    decode_responses=True  # 문자열 자동 디코딩
+                )
+                print("Redis 캐시 서버 연결 성공")
+            except Exception as e:
+                print(f"Redis 연결 실패: {e}")
+                self.use_redis = False
+                print("결과 캐싱이 비활성화됩니다")
+        
+        # 메모리 캐시 (Redis 실패 시 대체용)
+        self.memory_cache = {}
+        
+        # LRU 캐시 데코레이터로 프롬프트 생성 결과 캐싱
+        self.prepare_prompt = lru_cache(maxsize=1000)(self._prepare_prompt)
         
         # 기본 평가 가중치 설정 (각 항목별 중요도)
         self.weights = {
@@ -62,9 +94,13 @@ class SpecEvaluator:
         self.min_score = 50  # 최소 점수
         self.max_score = 95  # 최대 점수
         
+        # 캐시 통계
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
         print("모델 초기화 완료!")
 
-    def prepare_prompt(self, spec_data):
+    def _prepare_prompt(self, spec_data):
         """스펙 데이터를 평가하기 위한 프롬프트 준비"""
         # 지원직종에 따른 맞춤형 프롬프트 생성
         job = spec_data.get("desired_job", "일반")
@@ -121,21 +157,78 @@ class SpecEvaluator:
         
         return prompt
 
+    def generate_cache_key(self, spec_data):
+        """스펙 데이터로부터 캐시 키 생성"""
+        # JSON 직렬화 및 정렬하여 일관된 해시 생성
+        spec_json = json.dumps(spec_data, sort_keys=True)
+        return hashlib.md5(spec_json.encode()).hexdigest()
+
+    def get_from_cache(self, cache_key):
+        """캐시에서 결과 조회"""
+        if self.use_redis:
+            try:
+                cached_data = self.redis_client.get(cache_key)
+                if cached_data:
+                    return json.loads(cached_data)
+            except Exception as e:
+                print(f"Redis 캐시 조회 실패: {e}")
+        
+        # Redis 실패 시 메모리 캐시 확인
+        return self.memory_cache.get(cache_key)
+
+    def save_to_cache(self, cache_key, result):
+        """결과를 캐시에 저장"""
+        if self.use_redis:
+            try:
+                self.redis_client.setex(
+                    cache_key,
+                    self.cache_ttl,
+                    json.dumps(result)
+                )
+            except Exception as e:
+                print(f"Redis 캐시 저장 실패: {e}")
+                # Redis 실패 시 메모리 캐시 사용
+                self.memory_cache[cache_key] = result
+        else:
+            # Redis 미사용 시 메모리 캐시 사용
+            self.memory_cache[cache_key] = result
+            
+            # 메모리 캐시 크기 제한 (1000개 항목)
+            if len(self.memory_cache) > 1000:
+                # 가장 오래된 키 하나 제거
+                oldest_key = next(iter(self.memory_cache))
+                del self.memory_cache[oldest_key]
+
     def evaluate_with_llm(self, prompt):
-        """XGLM 모델을 사용하여 스펙을 평가"""
+        """XGLM 모델을 사용하여 스펙을 평가 (KV 캐시 활용)"""
         # 토큰화
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         
-        # 모델 추론
+        # 모델 추론 (KV 캐시 활용)
         with torch.no_grad():
-            outputs = self.model.generate(
-                inputs["input_ids"],
-                max_new_tokens=5,  # 점수만 생성하므로 짧게 설정
-                temperature=0.7,   # 약간의 다양성 허용
-                top_p=0.9,         # 핵심 토큰에 집중
-                do_sample=True,    # 샘플링 사용
-                pad_token_id=self.tokenizer.eos_token_id
-            )
+            # KV 캐시 사용 설정
+            if self.use_kv_cache:
+                # use_cache=True를 명시적으로 설정하여 KV 캐시 활성화
+                outputs = self.model.generate(
+                    inputs["input_ids"],
+                    max_new_tokens=5,  # 점수만 생성하므로 짧게 설정
+                    temperature=0.7,   # 약간의 다양성 허용
+                    top_p=0.9,         # 핵심 토큰에 집중
+                    do_sample=True,    # 샘플링 사용
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,    # KV 캐시 활성화
+                )
+            else:
+                # KV 캐시를 사용하지 않는 경우
+                outputs = self.model.generate(
+                    inputs["input_ids"],
+                    max_new_tokens=5,  # 점수만 생성하므로 짧게 설정
+                    temperature=0.7,   # 약간의 다양성 허용
+                    top_p=0.9,         # 핵심 토큰에 집중
+                    do_sample=True,    # 샘플링 사용
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    use_cache=False,   # KV 캐시 비활성화
+                )
         
         # 결과 디코딩
         generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -507,19 +600,44 @@ class SpecEvaluator:
         return total_score
 
     def predict(self, spec_data):
-        """스펙 정보를 받아 평가 결과 반환"""
+        """스펙 정보를 받아 평가 결과 반환 (캐싱 적용)"""
         try:
+            # 캐시 키 생성
+            cache_key = self.generate_cache_key(spec_data)
+            
+            # 캐시에서 결과 조회
+            cached_result = self.get_from_cache(cache_key)
+            if cached_result:
+                self.cache_hits += 1
+                print(f"캐시 적중! (총 {self.cache_hits}번 적중)")
+                return cached_result
+            
+            self.cache_misses += 1
+            print(f"캐시 미스 (총 {self.cache_misses}번 미스)")
+            
             # 프롬프트 생성
             prompt = self.prepare_prompt(spec_data)
+            
+            # 시작 시간 기록
+            start_time = time.time()
             
             # LLM으로 평가
             score = self.evaluate_with_llm(prompt)
             
-            # 결과 반환
-            return {
+            # 소요 시간 계산
+            elapsed_time = time.time() - start_time
+            print(f"모델 추론 시간: {elapsed_time:.2f}초")
+            
+            # 결과 생성
+            result = {
                 "nickname": spec_data.get("nickname", "이름 없음"),
                 "totalScore": score
             }
+            
+            # 결과 캐싱
+            self.save_to_cache(cache_key, result)
+            
+            return result
         except Exception as e:
             print(f"평가 중 오류 발생: {e}")
             # 오류 발생 시 규칙 기반 평가로 대체
