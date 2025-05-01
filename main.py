@@ -204,4 +204,4 @@ def calculate_spec(spec: SpecV1):
 if __name__ == "__main__":
     import uvicorn
     # 개발 모드로 실행 (reload=True)
-    uvicorn.run("spec_api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("spec_api:app", host="127.0.0.1", port=8000, reload=True)
