@@ -6,6 +6,8 @@ uvicorn==0.23.2
 torch==2.0.1
 transformers==4.34.0
 numpy==1.24.3
+sentencepiece==0.2.0
+protobuf==6.30.2
 
 # 유틸리티
 tqdm==4.66.1
