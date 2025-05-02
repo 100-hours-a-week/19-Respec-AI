@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 import os, time, redis    
 import uvicorn
 from datetime import datetime
-from kv_cache_implementation import SpecEvaluator
+from model import SpecEvaluator
 from batch_processing import BatchProcessor
 # FastAPI 애플리케이션 인스턴스 생성
 app = FastAPI(title="Spec Score API")
