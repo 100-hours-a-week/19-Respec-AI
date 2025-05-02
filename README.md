@@ -19,7 +19,7 @@ pip install --no-cache-dir -r requirements.txt
 ```
 
 ## 서버 부팅후 사용법
-redis server 실행
+redis server 실행후 Fast api 서버 실행
 ``` bash
 redis-server
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
