@@ -47,8 +47,7 @@ class SpecEvaluator:
         self.memory_cache = {}
         
         # LRU 캐시 데코레이터로 프롬프트 생성 결과 캐싱
-        self.prepare_prompt = lru_cache(maxsize=1000)(self._prepare_prompt)
-        
+        self.prepare_prompt_cached = lru_cache(maxsize=1000)(self._prepare_prompt_wrapper)
         # 기본 평가 가중치 설정 (각 항목별 중요도)
         self.weights = {
             "universities": 0.3,  # 학력
@@ -100,7 +99,12 @@ class SpecEvaluator:
         
         print("모델 초기화 완료!")
 
-    def _prepare_prompt(self, spec_data):
+    def _prepare_prompt_wrapper(self, spec_data_json):
+        """JSON 문자열을 딕셔너리로 변환 후 실제 프롬프트 준비 함수 호출"""
+        spec_data = json.loads(spec_data_json)
+        return self._prepare_prompt_uncached(spec_data)
+    
+    def _prepare_prompt_uncached(self, spec_data):
         """스펙 데이터를 평가하기 위한 프롬프트 준비"""
         # 지원직종에 따른 맞춤형 프롬프트 생성
         job = spec_data.get("desired_job", "일반")
@@ -157,7 +161,7 @@ class SpecEvaluator:
         종합 평가 점수:"""
         
         return prompt
-
+    
     def generate_cache_key(self, spec_data):
         """스펙 데이터로부터 캐시 키 생성"""
         # JSON 직렬화 및 정렬하여 일관된 해시 생성
@@ -200,7 +204,7 @@ class SpecEvaluator:
                 oldest_key = next(iter(self.memory_cache))
                 del self.memory_cache[oldest_key]
 
-    def evaluate_with_llm(self, prompt):
+    def evaluate_with_llm(self, prompt, spec_data):  # spec_data 파라미터 추가
         """XGLM 모델을 사용하여 스펙을 평가 (KV 캐시 활용)"""
         # 토큰화
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
@@ -634,14 +638,16 @@ class SpecEvaluator:
             self.cache_misses += 1
             print(f"캐시 미스 (총 {self.cache_misses}번 미스)")
             
+            # JSON 문자열로 변환하여 캐시 가능한 형태로 만듦
+            spec_data_json = json.dumps(spec_data, sort_keys=True)
             # 프롬프트 생성
-            prompt = self.prepare_prompt(spec_data)
+            prompt = self.prepare_prompt_cached(spec_data_json)
             
             # 시작 시간 기록
             start_time = time.time()
             
-            # LLM으로 평가
-            score = self.evaluate_with_llm(prompt)
+            # LLM으로 평가 - spec_data도 함께 전달
+            score = self.evaluate_with_llm(prompt, spec_data)
             
             # 소요 시간 계산
             elapsed_time = time.time() - start_time
@@ -665,7 +671,7 @@ class SpecEvaluator:
                 "nickname": spec_data.get("nickname", "이름 없음"),
                 "totalScore": score
             }
-            
+        
     def get_cache_stats(self):
         """캐시 통계 정보 반환"""
         total_requests = self.cache_hits + self.cache_misses
