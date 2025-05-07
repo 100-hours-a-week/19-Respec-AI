@@ -123,11 +123,12 @@ class SpecEvaluator:
                 gpa_info = f"{uni.get('gpa', '정보 없음')}/{uni.get('gpa_max', '정보 없음')}" if 'gpa' in uni else "정보 없음"
                 prompt += f"- {uni.get('school_name', '정보 없음')}, {uni.get('degree', '정보 없음')}, {uni.get('major', '정보 없음')}, GPA: {gpa_info}\n"
         
-        # 경력 정보 추가
+        # 경력 정보 추가 (work_month 포함)
         if "careers" in spec_data and spec_data["careers"]:
             prompt += "\n[경력 사항]\n"
             for career in spec_data["careers"]:
-                prompt += f"- {career.get('company', '정보 없음')}, {career.get('role', '정보 없음')}\n"
+                work_month_info = f", 근무기간: {career.get('work_month', '정보 없음')}개월" if 'work_month' in career else ""
+                prompt += f"- {career.get('company', '정보 없음')}, {career.get('role', '정보 없음')}{work_month_info}\n"
         
         # 자격증 정보 추가
         if "certificates" in spec_data and spec_data["certificates"]:
@@ -240,11 +241,11 @@ class SpecEvaluator:
         try:
             # 숫자 형태의 문자열 추출
             import re
-            score_match = re.search(r'\d+', generated_score)
+            score_match = re.search(r'\d+(\.\d+)?', generated_score)  # 소수점도 인식하도록 수정
             if score_match:
-                score = int(score_match.group())
+                score = float(score_match.group())  # 정수가 아닌 실수로 변환
                 # 점수 범위 제한
-                score = max(0, min(100, score))
+                score = max(0.0, min(100.0, score))
                 return score
             else:
                 # 숫자를 찾지 못한 경우 규칙 기반 평가로 대체
@@ -355,7 +356,7 @@ class SpecEvaluator:
         
         scores["universities"] = uni_score
         
-        # 경력 평가
+        # 경력 평가 - work_month 반영
         career_score = 0
         if "careers" in spec_data and spec_data["careers"]:
             career_count = len(spec_data["careers"])
@@ -406,8 +407,26 @@ class SpecEvaluator:
                     else:
                         role_score = 70
                 
-                # 경력 점수 계산 (회사 40%, 역할 60%)
-                career_item_score = company_score * 0.4 + role_score * 0.6
+                # 근무 기간 가중치 (work_month 반영)
+                work_month = career.get("work_month", 0)
+                experience_weight = 1.0  # 기본값
+                
+                # 근무 기간에 따른 가중치 (로그 스케일로 점진적 증가)
+                if work_month:
+                    # 6개월 미만: 0.8, 6-12개월: 1.0, 12-24개월: 1.2, 24-36개월: 1.3, 36개월 이상: 1.5
+                    if work_month < 6:
+                        experience_weight = 0.8
+                    elif work_month < 12:
+                        experience_weight = 1.0
+                    elif work_month < 24:
+                        experience_weight = 1.2
+                    elif work_month < 36:
+                        experience_weight = 1.3
+                    else:
+                        experience_weight = 1.5
+                
+                # 경력 점수 계산 (회사 30%, 역할 50%, 경력 기간 20%)
+                career_item_score = (company_score * 0.3 + role_score * 0.5) * experience_weight
                 career_score += career_item_score
             
             # 여러 경력이 있을 경우 평균
@@ -595,9 +614,9 @@ class SpecEvaluator:
         
         # 점수 정규화
         total_score = self.min_score + (total_score / 100) * (self.max_score - self.min_score)
-        total_score = round(total_score)
         
-        return total_score
+        # 소수점 2자리까지 반환 (반올림하지 않고 소수점 유지)
+        return round(total_score, 2)
 
     def predict(self, spec_data):
         """스펙 정보를 받아 평가 결과 반환 (캐싱 적용)"""
@@ -628,7 +647,7 @@ class SpecEvaluator:
             elapsed_time = time.time() - start_time
             print(f"모델 추론 시간: {elapsed_time:.2f}초")
             
-            # 결과 생성
+            # 결과 생성 - 소수점 2자리 유지
             result = {
                 "nickname": spec_data.get("nickname", "이름 없음"),
                 "totalScore": score
@@ -646,3 +665,15 @@ class SpecEvaluator:
                 "nickname": spec_data.get("nickname", "이름 없음"),
                 "totalScore": score
             }
+            
+    def get_cache_stats(self):
+        """캐시 통계 정보 반환"""
+        total_requests = self.cache_hits + self.cache_misses
+        hit_rate = (self.cache_hits / total_requests) * 100 if total_requests > 0 else 0
+        
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "total_requests": total_requests,
+            "hit_rate_percent": round(hit_rate, 2)
+        }

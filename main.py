@@ -74,6 +74,8 @@ class Career(BaseModel):
     company: str
     # 직책/역할 (Optional)
     role: Optional[str]
+    # 근무 개월 (Optional)
+    work_month: Optional[int]
 
 class Language(BaseModel):
     # 시험 종류 (예: TOEIC, TOEFL 등)
@@ -113,7 +115,7 @@ class SpecV1Respone(BaseModel):
     # 지원자 닉네임
     nickname: str 
     # 총점
-    totalScore: int
+    totalScore: float
 
 class ErrorResponse(BaseModel):
     # 오류 메시지
