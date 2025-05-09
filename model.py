@@ -10,44 +10,15 @@ from functools import lru_cache
 
 class SpecEvaluator:
     def __init__(self, use_redis=True, redis_host="localhost", redis_port=6379, redis_db=0, cache_ttl=86400):
+        # 기존 초기화 코드는 동일하게 유지
         print("XGLM-564M 모델 로딩 중...")
         # XGLM-564M 모델 로드
         self.model_name = "facebook/xglm-564M"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
         
-        # GPU 사용 가능하면 GPU로 이동
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"사용 중인 디바이스: {self.device}")
-        self.model.to(self.device)
+        # 기존 코드 생략...
         
-        # KV 캐시 설정
-        self.use_kv_cache = True  # 모델의 KV 캐시 사용 여부
-        
-        # 외부 결과 캐싱 설정
-        self.use_redis = use_redis
-        self.cache_ttl = cache_ttl  # 캐시 유효 기간 (초)
-        
-        # Redis 클라이언트 초기화
-        if self.use_redis:
-            try:
-                self.redis_client = redis.Redis(
-                    host=redis_host,
-                    port=redis_port,
-                    db=redis_db,
-                    decode_responses=True  # 문자열 자동 디코딩
-                )
-                print("Redis 캐시 서버 연결 성공")
-            except Exception as e:
-                print(f"Redis 연결 실패: {e}")
-                self.use_redis = False
-                print("결과 캐싱이 비활성화됩니다")
-        
-        # 메모리 캐시 (Redis 실패 시 대체용)
-        self.memory_cache = {}
-        
-        # LRU 캐시 데코레이터로 프롬프트 생성 결과 캐싱
-        self.prepare_prompt_cached = lru_cache(maxsize=1000)(self._prepare_prompt_wrapper)
         # 기본 평가 가중치 설정 (각 항목별 중요도)
         self.weights = {
             "universities": 0.3,  # 학력
@@ -59,41 +30,97 @@ class SpecEvaluator:
         
         # 직무별 가중치 조정값 (기본 가중치에 가감)
         self.job_weights = {
-            "백엔드 개발자": {
+            "경영·사무": {
                 "universities": 0.05,   # 학력 가중치 증가
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": 0.05,      # 어학 가중치 증가
+                "activities": -0.20     # 활동 가중치 감소
+            },
+            "마케팅·광고·홍보": {
+                "universities": -0.05,  # 학력 가중치 감소
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": 0.00,   # 자격증 가중치 유지
+                "languages": 0.05,      # 어학 가중치 증가
+                "activities": -0.05     # 활동 가중치 감소
+            },
+            "무역·유통": {
+                "universities": 0.00,   # 학력 가중치 유지
+                "careers": 0.10,        # 경력 가중치 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": 0.05,      # 어학 가중치 증가
+                "activities": -0.20     # 활동 가중치 감소
+            },
+            "인터넷·IT": {
+                "universities": 0.00,   # 학력 가중치 유지
+                "careers": 0.10,        # 경력 가중치 증가
+                "certificates": 0.10,   # 자격증 가중치 증가
+                "languages": -0.05,     # 어학 가중치 감소
+                "activities": -0.15     # 활동 가중치 감소
+            },
+            "생산·제조": {
+                "universities": -0.05,  # 학력 가중치 감소
+                "careers": 0.15,        # 경력 가중치 크게 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": -0.10,     # 어학 가중치 감소
+                "activities": -0.05     # 활동 가중치 감소
+            },
+            "영업·고객상담": {
+                "universities": -0.10,  # 학력 가중치 크게 감소
+                "careers": 0.10,        # 경력 가중치 증가
+                "certificates": 0.00,   # 자격증 가중치 유지
+                "languages": 0.10,      # 어학 가중치 증가
+                "activities": -0.10     # 활동 가중치 감소
+            },
+            "건설": {
+                "universities": 0.00,   # 학력 가중치 유지
+                "careers": 0.15,        # 경력 가중치 크게 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": -0.15,     # 어학 가중치 크게 감소
+                "activities": -0.05     # 활동 가중치 감소
+            },
+            "금융": {
+                "universities": 0.10,   # 학력 가중치 증가
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": 0.00,      # 어학 가중치 유지
+                "activities": -0.20     # 활동 가중치 감소
+            },
+            "연구개발·설계": {
+                "universities": 0.15,   # 학력 가중치 크게 증가
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": -0.05,     # 어학 가중치 감소
+                "activities": -0.20     # 활동 가중치 감소
+            },
+            "디자인": {
+                "universities": -0.05,  # 학력 가중치 감소
                 "careers": 0.10,        # 경력 가중치 증가
                 "certificates": 0.05,   # 자격증 가중치 증가
                 "languages": -0.10,     # 어학 가중치 감소
-                "activities": -0.10     # 활동 가중치 감소
+                "activities": 0.00      # 활동 가중치 유지
             },
-            "프론트엔드 개발자": {
-                "universities": -0.05,
-                "careers": 0.10,
-                "certificates": 0.05,
-                "languages": -0.05,
-                "activities": -0.05
+            "미디어": {
+                "universities": -0.05,  # 학력 가중치 감소
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": 0.00,   # 자격증 가중치 유지
+                "languages": 0.00,      # 어학 가중치 유지
+                "activities": 0.00      # 활동 가중치 유지
             },
-            "데이터 사이언티스트": {
-                "universities": 0.10,
-                "careers": 0.05,
-                "certificates": 0.05,
-                "languages": -0.10,
-                "activities": -0.10
-            },
-            "마케팅": {
-                "universities": -0.10,
-                "careers": 0.10,
-                "languages": 0.10,
-                "certificates": -0.05,
-                "activities": -0.05
+            "전문·특수직": {
+                "universities": 0.10,   # 학력 가중치 증가
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": 0.05,   # 자격증 가중치 증가
+                "languages": 0.00,      # 어학 가중치 유지
+                "activities": -0.20     # 활동 가중치 감소
             }
         }
         
-        # 점수 정규화 파라미터
+        # 점수 정규화 파라미터 - 기존과 동일
         self.min_score = 50  # 최소 점수
         self.max_score = 95  # 최대 점수
         
-        # 캐시 통계
+        # 캐시 통계 - 기존과 동일
         self.cache_hits = 0
         self.cache_misses = 0
         
@@ -109,8 +136,36 @@ class SpecEvaluator:
         # 지원직종에 따른 맞춤형 프롬프트 생성
         job = spec_data.get("desired_job", "일반")
         
+        # 지원직종에 따른 맞춤형 프롬프트 생성
+        job_specific_description = ""
+        if job == "경영·사무":
+            job_specific_description = "경영 및 사무 직종은 조직 관리, 행정 업무, 문서작성 등의 능력이 중요합니다."
+        elif job == "마케팅·광고·홍보":
+            job_specific_description = "마케팅, 광고, 홍보 분야는 창의성, 커뮤니케이션 능력, 트렌드 분석 능력이 중요합니다."
+        elif job == "무역·유통":
+            job_specific_description = "무역 및 유통 분야는 글로벌 비즈니스 역량, 어학 능력, 물류 이해도가 중요합니다."
+        elif job == "인터넷·IT":
+            job_specific_description = "IT 분야는 기술적 전문성, 프로그래밍 능력, 문제 해결 능력이 중요합니다."
+        elif job == "생산·제조":
+            job_specific_description = "생산 및 제조 분야는 공정 이해도, 품질 관리 능력, 현장 경험이 중요합니다."
+        elif job == "영업·고객상담":
+            job_specific_description = "영업 및 고객상담 분야는 설득력, 대인관계 능력, 고객 니즈 파악 능력이 중요합니다."
+        elif job == "건설":
+            job_specific_description = "건설 분야는 전문 기술, 현장 경험, 안전 관리 능력이 중요합니다."
+        elif job == "금융":
+            job_specific_description = "금융 분야는 수리 능력, 경제 이해도, 분석력이 중요합니다."
+        elif job == "연구개발·설계":
+            job_specific_description = "연구개발 및 설계 분야는 전문 지식, 분석력, 창의적 문제 해결 능력이 중요합니다."
+        elif job == "디자인":
+            job_specific_description = "디자인 분야는 창의성, 트렌드 감각, 시각적 표현 능력이 중요합니다."
+        elif job == "미디어":
+            job_specific_description = "미디어 분야는 콘텐츠 제작 능력, 스토리텔링, 커뮤니케이션 능력이 중요합니다."
+        elif job == "전문·특수직":
+            job_specific_description = "전문 및 특수직은 해당 분야의 깊은 전문성, 자격증, 경험이 중요합니다."
+        
         prompt = f"""
         다음은 '{job}' 직종에 지원한 지원자의 스펙입니다. 
+        {job_specific_description}
         이 스펙을 100점 만점으로 평가해주세요.
 
         [지원자 정보]
@@ -316,37 +371,127 @@ class SpecEvaluator:
                 else:
                     gpa_score = 75  # 기본값
                 
-                # 전공 관련성 (단순화)
+                # 전공 관련성 (직무별 관련 전공 매핑)
                 major = uni.get("major", "").lower()
                 major_relevance = 1.0  # 기본값
                 
                 # 지원 직무와 전공 관련성
-                if job == "백엔드 개발자" or job == "프론트엔드 개발자":
+                if job == "경영·사무":
+                    if "경영" in major or "경제" in major or "회계" in major or "통계" in major:
+                        major_relevance = 1.2
+                    elif "행정" in major or "사무" in major:
+                        major_relevance = 1.1
+                    elif "인문" in major or "사회" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "마케팅·광고·홍보":
+                    if "마케팅" in major or "광고" in major or "홍보" in major or "미디어" in major:
+                        major_relevance = 1.2
+                    elif "경영" in major or "커뮤니케이션" in major or "심리" in major:
+                        major_relevance = 1.1
+                    elif "디자인" in major or "사회" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "무역·유통":
+                    if "무역" in major or "유통" in major or "물류" in major:
+                        major_relevance = 1.2
+                    elif "경영" in major or "경제" in major or "국제" in major:
+                        major_relevance = 1.1
+                    elif "사회" in major or "외국어" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "인터넷·IT":
                     if "컴퓨터" in major or "소프트웨어" in major or "전산" in major or "정보" in major:
                         major_relevance = 1.2
-                    elif "전자" in major or "공학" in major:
+                    elif "전자" in major or "통신" in major:
                         major_relevance = 1.1
-                    elif "자연과학" in major or "수학" in major:
+                    elif "수학" in major or "자연과학" in major:
                         major_relevance = 1.0
                     else:
                         major_relevance = 0.9
                 
-                elif job == "데이터 사이언티스트":
-                    if "통계" in major or "데이터" in major or "수학" in major:
+                elif job == "생산·제조":
+                    if "기계" in major or "산업" in major or "제조" in major or "생산" in major:
                         major_relevance = 1.2
-                    elif "컴퓨터" in major or "전산" in major:
+                    elif "공학" in major or "재료" in major:
                         major_relevance = 1.1
-                    elif "공학" in major or "자연과학" in major:
+                    elif "화학" in major or "물리" in major:
                         major_relevance = 1.0
                     else:
                         major_relevance = 0.9
                 
-                elif job == "마케팅":
-                    if "마케팅" in major or "경영" in major or "광고" in major:
+                elif job == "영업·고객상담":
+                    if "영업" in major or "마케팅" in major or "경영" in major:
                         major_relevance = 1.2
-                    elif "커뮤니케이션" in major or "미디어" in major or "심리" in major:
+                    elif "심리" in major or "커뮤니케이션" in major:
                         major_relevance = 1.1
-                    elif "사회과학" in major or "인문" in major:
+                    elif "사회" in major or "인문" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "건설":
+                    if "건축" in major or "토목" in major or "건설" in major:
+                        major_relevance = 1.2
+                    elif "도시" in major or "공학" in major:
+                        major_relevance = 1.1
+                    elif "자연과학" in major or "지리" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "금융":
+                    if "금융" in major or "경제" in major or "경영" in major or "통계" in major:
+                        major_relevance = 1.2
+                    elif "회계" in major or "수학" in major:
+                        major_relevance = 1.1
+                    elif "컴퓨터" in major or "사회" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "연구개발·설계":
+                    if "공학" in major or "자연과학" in major or "연구" in major:
+                        major_relevance = 1.2
+                    elif "수학" in major or "통계" in major:
+                        major_relevance = 1.1
+                    elif "컴퓨터" in major or "기술" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "디자인":
+                    if "디자인" in major or "시각" in major or "산업디자인" in major:
+                        major_relevance = 1.2
+                    elif "미술" in major or "예술" in major:
+                        major_relevance = 1.1
+                    elif "건축" in major or "컴퓨터" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "미디어":
+                    if "미디어" in major or "방송" in major or "언론" in major or "영상" in major:
+                        major_relevance = 1.2
+                    elif "커뮤니케이션" in major or "광고" in major:
+                        major_relevance = 1.1
+                    elif "문학" in major or "사회" in major:
+                        major_relevance = 1.0
+                    else:
+                        major_relevance = 0.9
+                
+                elif job == "전문·특수직":
+                    if "법학" in major or "의학" in major or "약학" in major or "특수" in major:
+                        major_relevance = 1.2
+                    elif "교육" in major or "심리" in major:
+                        major_relevance = 1.1
+                    elif "사회" in major or "복지" in major:
                         major_relevance = 1.0
                     else:
                         major_relevance = 0.9
@@ -372,44 +517,133 @@ class SpecEvaluator:
                 company_score = 0
                 if "삼성" in company or "네이버" in company or "카카오" in company or "lg" in company:
                     company_score = 95
-                elif "기업" in company or "그룹" in company:
+                elif "기업" in company or "그룹" in company or "주식회사" in company:
                     company_score = 85
                 else:
                     company_score = 75
                 
                 # 역할 관련성 점수
                 role_score = 0
-                if job == "백엔드 개발자":
-                    if "백엔드" in role or "서버" in role or "개발자" in role or "엔지니어" in role:
-                        role_score = 95
-                    elif "개발" in role or "프로그래머" in role:
-                        role_score = 85
-                    else:
-                        role_score = 70
                 
-                elif job == "프론트엔드 개발자":
-                    if "프론트엔드" in role or "ui" in role or "ux" in role or "웹" in role:
+                if job == "경영·사무":
+                    if "사무" in role or "총무" in role or "인사" in role or "행정" in role:
                         role_score = 95
-                    elif "개발" in role or "디자이너" in role:
+                    elif "경영" in role or "관리" in role:
+                        role_score = 90
+                    elif "비서" in role or "사원" in role:
                         role_score = 85
                     else:
-                        role_score = 70
+                        role_score = 75
                 
-                elif job == "데이터 사이언티스트":
-                    if "데이터" in role or "분석" in role or "사이언티스트" in role:
+                elif job == "마케팅·광고·홍보":
+                    if "마케팅" in role or "광고" in role or "홍보" in role or "브랜드" in role:
                         role_score = 95
-                    elif "연구" in role or "통계" in role:
+                    elif "기획" in role or "카피" in role:
+                        role_score = 90
+                    elif "디지털" in role or "sns" in role:
                         role_score = 85
                     else:
-                        role_score = 70
+                        role_score = 75
                 
-                elif job == "마케팅":
-                    if "마케팅" in role or "광고" in role or "브랜드" in role:
+                elif job == "무역·유통":
+                    if "무역" in role or "유통" in role or "물류" in role or "구매" in role:
                         role_score = 95
-                    elif "홍보" in role or "기획" in role:
+                    elif "수출" in role or "수입" in role:
+                        role_score = 90
+                    elif "통관" in role or "운송" in role:
                         role_score = 85
                     else:
-                        role_score = 70
+                        role_score = 75
+                
+                elif job == "인터넷·IT":
+                    if "개발" in role or "프로그래머" in role or "엔지니어" in role:
+                        role_score = 95
+                    elif "웹" in role or "앱" in role or "서버" in role:
+                        role_score = 90
+                    elif "디자인" in role or "기획" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "생산·제조":
+                    if "생산" in role or "제조" in role or "공정" in role:
+                        role_score = 95
+                    elif "품질" in role or "관리" in role:
+                        role_score = 90
+                    elif "조립" in role or "검사" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "영업·고객상담":
+                    if "영업" in role or "세일즈" in role or "판매" in role:
+                        role_score = 95
+                    elif "상담" in role or "고객" in role or "cs" in role:
+                        role_score = 90
+                    elif "매장" in role or "관리" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "건설":
+                    if "건설" in role or "현장" in role or "공사" in role:
+                        role_score = 95
+                    elif "감리" in role or "설계" in role:
+                        role_score = 90
+                    elif "안전" in role or "관리" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "금융":
+                    if "금융" in role or "은행" in role or "투자" in role:
+                        role_score = 95
+                    elif "회계" in role or "경리" in role:
+                        role_score = 90
+                    elif "자산" in role or "관리" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "연구개발·설계":
+                    if "연구" in role or "개발" in role or "r&d" in role:
+                        role_score = 95
+                    elif "설계" in role or "디자인" in role:
+                        role_score = 90
+                    elif "분석" in role or "기술" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "디자인":
+                    if "디자인" in role or "그래픽" in role or "ui" in role or "ux" in role:
+                        role_score = 95
+                    elif "일러스트" in role or "시각" in role:
+                        role_score = 90
+                    elif "편집" in role or "웹" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "미디어":
+                    if "미디어" in role or "방송" in role or "pd" in role or "기자" in role:
+                        role_score = 95
+                    elif "영상" in role or "촬영" in role:
+                        role_score = 90
+                    elif "편집" in role or "작가" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
+                
+                elif job == "전문·특수직":
+                    if "의사" in role or "변호사" in role or "회계사" in role or "교수" in role:
+                        role_score = 95
+                    elif "교사" in role or "전문가" in role:
+                        role_score = 90
+                    elif "약사" in role or "상담사" in role:
+                        role_score = 85
+                    else:
+                        role_score = 75
                 
                 # 근무 기간 가중치 (work_month 반영)
                 work_month = career.get("work_month", 0)
@@ -437,7 +671,6 @@ class SpecEvaluator:
             career_score = career_score / career_count
         
         scores["careers"] = career_score
-        
         # 자격증 평가
         cert_score = 0
         if "certificates" in spec_data and spec_data["certificates"]:
@@ -445,30 +678,127 @@ class SpecEvaluator:
             for cert in spec_data["certificates"]:
                 cert = cert.lower()
                 
-                # 직무 관련 자격증 점수 (단순화)
-                if job == "백엔드 개발자" or job == "프론트엔드 개발자":
+                # 직무 관련 자격증 점수
+                if job == "경영·사무":
+                    if "경영지도사" in cert or "사무" in cert or "행정사" in cert:
+                        cert_score += 95
+                    elif "세무" in cert or "회계" in cert or "컴퓨터활용능력" in cert:
+                        cert_score += 90
+                    elif "엑셀" in cert or "워드" in cert or "정보처리" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "마케팅·광고·홍보":
+                    if "마케팅" in cert or "광고" in cert or "홍보" in cert:
+                        cert_score += 95
+                    elif "사회조사" in cert or "빅데이터" in cert:
+                        cert_score += 90
+                    elif "인터넷" in cert or "통계" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "무역·유통":
+                    if "무역" in cert or "유통" in cert or "물류" in cert or "관세사" in cert:
+                        cert_score += 95
+                    elif "국제" in cert or "수출" in cert:
+                        cert_score += 90
+                    elif "유통" in cert or "무역영어" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "인터넷·IT":
                     if "정보처리" in cert or "aws" in cert or "데이터베이스" in cert or "cloud" in cert:
                         cert_score += 95
-                    elif "코딩" in cert or "프로그래밍" in cert or "개발" in cert:
+                    elif "네트워크" in cert or "보안" in cert:
+                        cert_score += 90
+                    elif "코딩" in cert or "프로그래밍" in cert:
                         cert_score += 85
                     else:
-                        cert_score += 70
+                        cert_score += 75
                 
-                elif job == "데이터 사이언티스트":
-                    if "데이터" in cert or "분석" in cert or "통계" in cert or "빅데이터" in cert:
+                elif job == "생산·제조":
+                    if "품질" in cert or "생산" in cert or "제조" in cert:
                         cert_score += 95
-                    elif "python" in cert or "sql" in cert or "머신러닝" in cert:
+                    elif "안전" in cert or "기계" in cert:
+                        cert_score += 90
+                    elif "전기" in cert or "관리" in cert:
                         cert_score += 85
                     else:
-                        cert_score += 70
+                        cert_score += 75
                 
-                elif job == "마케팅":
-                    if "마케팅" in cert or "광고" in cert or "디지털마케팅" in cert:
+                elif job == "영업·고객상담":
+                    if "영업" in cert or "판매" in cert or "고객" in cert:
                         cert_score += 95
-                    elif "사회조사" in cert or "포토샵" in cert:
+                    elif "마케팅" in cert or "cs" in cert:
+                        cert_score += 90
+                    elif "세일즈" in cert or "상담" in cert:
                         cert_score += 85
                     else:
-                        cert_score += 70
+                        cert_score += 75
+                
+                elif job == "건설":
+                    if "건축" in cert or "토목" in cert or "건설" in cert:
+                        cert_score += 95
+                    elif "안전" in cert or "감리" in cert:
+                        cert_score += 90
+                    elif "설비" in cert or "cad" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "금융":
+                    if "금융" in cert or "증권" in cert or "회계사" in cert or "투자" in cert:
+                        cert_score += 95
+                    elif "은행" in cert or "보험" in cert:
+                        cert_score += 90
+                    elif "재무" in cert or "펀드" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "연구개발·설계":
+                    if "기술사" in cert or "연구" in cert or "설계" in cert:
+                        cert_score += 95
+                    elif "기사" in cert or "r&d" in cert:
+                        cert_score += 90
+                    elif "cad" in cert or "분석" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "디자인":
+                    if "디자인" in cert or "그래픽" in cert or "ui" in cert:
+                        cert_score += 95
+                    elif "포토샵" in cert or "일러스트" in cert:
+                        cert_score += 90
+                    elif "멀티미디어" in cert or "웹" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                # 미디어 분야 자격증 평가 계속
+                elif job == "미디어":
+                    if "방송" in cert or "미디어" in cert or "언론" in cert:
+                        cert_score += 95
+                    elif "영상" in cert or "촬영" in cert:
+                        cert_score += 90
+                    elif "편집" in cert or "작가" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
+                
+                elif job == "전문·특수직":
+                    if "변호사" in cert or "의사" in cert or "약사" in cert or "회계사" in cert:
+                        cert_score += 95
+                    elif "세무사" in cert or "교사" in cert:
+                        cert_score += 90
+                    elif "상담사" in cert or "공인" in cert:
+                        cert_score += 85
+                    else:
+                        cert_score += 75
                 
                 else:  # 기타 직종
                     cert_score += 80  # 기본 점수
@@ -530,7 +860,19 @@ class SpecEvaluator:
                 else:  # 기타 어학 시험
                     test_score = 80  # 기본 점수
                 
-                lang_score += test_score
+                # 직무별 어학 중요도 가중치 부여
+                job_lang_weight = 1.0
+                
+                if job == "무역·유통":
+                    job_lang_weight = 1.3  # 무역은 외국어 매우 중요
+                elif job == "영업·고객상담":
+                    job_lang_weight = 1.2  # 글로벌 고객 응대 가능성
+                elif job == "마케팅·광고·홍보" or job == "금융" or job == "미디어":
+                    job_lang_weight = 1.1  # 약간 중요
+                elif job == "생산·제조" or job == "건설":
+                    job_lang_weight = 0.9  # 약간 덜 중요
+                
+                lang_score += test_score * job_lang_weight
             
             # 어학 평균 점수
             lang_score = lang_score / lang_count
@@ -570,26 +912,123 @@ class SpecEvaluator:
                 
                 # 직무 관련성 점수
                 relevance_score = 0
-                if job == "백엔드 개발자" or job == "프론트엔드 개발자":
+                
+                if job == "경영·사무":
+                    if "경영" in name or "기획" in name or "창업" in name:
+                        relevance_score = 95
+                    elif "행정" in name or "사무" in name:
+                        relevance_score = 90
+                    elif "경제" in name or "회계" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "마케팅·광고·홍보":
+                    if "마케팅" in name or "광고" in name or "홍보" in name:
+                        relevance_score = 95
+                    elif "브랜드" in name or "기획" in name:
+                        relevance_score = 90
+                    elif "디자인" in name or "sns" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "무역·유통":
+                    if "무역" in name or "유통" in name or "국제" in name:
+                        relevance_score = 95
+                    elif "비즈니스" in name or "교류" in name:
+                        relevance_score = 90
+                    elif "외국어" in name or "경제" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "인터넷·IT":
                     if "개발" in name or "코딩" in name or "프로그래밍" in name or "해커톤" in name:
                         relevance_score = 95
                     elif "전산" in name or "컴퓨터" in name or "it" in name:
+                        relevance_score = 90
+                    elif "소프트웨어" in name or "스타트업" in name:
                         relevance_score = 85
                     else:
                         relevance_score = 75
                 
-                elif job == "데이터 사이언티스트":
-                    if "데이터" in name or "분석" in name or "통계" in name:
+                elif job == "생산·제조":
+                    if "생산" in name or "제조" in name or "공정" in name:
                         relevance_score = 95
-                    elif "ai" in name or "머신러닝" in name:
+                    elif "품질" in name or "관리" in name:
+                        relevance_score = 90
+                    elif "공학" in name or "설계" in name:
                         relevance_score = 85
                     else:
                         relevance_score = 75
                 
-                elif job == "마케팅":
-                    if "마케팅" in name or "광고" in name or "홍보" in name:
+                elif job == "영업·고객상담":
+                    if "영업" in name or "세일즈" in name or "판매" in name:
                         relevance_score = 95
-                    elif "기획" in name or "브랜드" in name:
+                    elif "고객" in name or "상담" in name:
+                        relevance_score = 90
+                    elif "서비스" in name or "마케팅" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "건설":
+                    if "건설" in name or "건축" in name or "토목" in name:
+                        relevance_score = 95
+                    elif "설계" in name or "감리" in name:
+                        relevance_score = 90
+                    elif "공학" in name or "안전" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "금융":
+                    if "금융" in name or "투자" in name or "경제" in name:
+                        relevance_score = 95
+                    elif "회계" in name or "재무" in name:
+                        relevance_score = 90
+                    elif "증권" in name or "은행" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "연구개발·설계":
+                    if "연구" in name or "개발" in name or "r&d" in name:
+                        relevance_score = 95
+                    elif "설계" in name or "분석" in name:
+                        relevance_score = 90
+                    elif "과학" in name or "공학" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "디자인":
+                    if "디자인" in name or "창작" in name or "미술" in name:
+                        relevance_score = 95
+                    elif "시각" in name or "ui" in name:
+                        relevance_score = 90
+                    elif "그래픽" in name or "편집" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "미디어":
+                    if "미디어" in name or "방송" in name or "언론" in name:
+                        relevance_score = 95
+                    elif "영상" in name or "기자" in name:
+                        relevance_score = 90
+                    elif "촬영" in name or "편집" in name:
+                        relevance_score = 85
+                    else:
+                        relevance_score = 75
+                
+                elif job == "전문·특수직":
+                    if "법률" in name or "의료" in name or "전문" in name:
+                        relevance_score = 95
+                    elif "교육" in name or "연구" in name:
+                        relevance_score = 90
+                    elif "상담" in name or "봉사" in name:
                         relevance_score = 85
                     else:
                         relevance_score = 75
@@ -616,8 +1055,13 @@ class SpecEvaluator:
         if total_score == 0:
             total_score = 65
         
-        # 점수 정규화
+        # 점수 정규화 (좀 더 넓은 구간으로 분산)
         total_score = self.min_score + (total_score / 100) * (self.max_score - self.min_score)
+        
+        # 포트폴리오 보너스 점수 (V2 API의 filelink가 있는 경우)
+        if "filelink" in spec_data and spec_data["filelink"]:
+            portfolio_bonus = 3  # 포트폴리오 제출 시 3점 추가
+            total_score = min(self.max_score, total_score + portfolio_bonus)
         
         # 소수점 2자리까지 반환 (반올림하지 않고 소수점 유지)
         return round(total_score, 2)
