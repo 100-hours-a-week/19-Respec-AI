@@ -17,8 +17,6 @@ class SpecEvaluator:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
         
-        # 기존 코드 생략...
-        
         # 기본 평가 가중치 설정 (각 항목별 중요도)
         self.weights = {
             "universities": 0.3,  # 학력
@@ -31,32 +29,32 @@ class SpecEvaluator:
         # 직무별 가중치 조정값 (기본 가중치에 가감)
         self.job_weights = {
             "경영·사무": {
-                "universities": 0.05,   # 학력 가중치 증가
-                "careers": 0.05,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": 0.05,      # 어학 가중치 증가
-                "activities": -0.20     # 활동 가중치 감소
+                "universities": 0.00,   # 학력 가중치 증가
+                "careers": -0.05,       # 경력 가중치 증가
+                "certificates": 0.04,   # 자격증 가중치 증가
+                "languages": 0.04,      # 어학 가중치 증가
+                "activities": -0.03     # 활동 가중치 감소
             },
             "마케팅·광고·홍보": {
                 "universities": -0.05,  # 학력 가중치 감소
-                "careers": 0.05,        # 경력 가중치 증가
+                "careers": 0.02,        # 경력 가중치 증가
                 "certificates": 0.00,   # 자격증 가중치 유지
-                "languages": 0.05,      # 어학 가중치 증가
-                "activities": -0.05     # 활동 가중치 감소
+                "languages": 0.02,      # 어학 가중치 증가
+                "activities": 0.01      # 활동 가중치 감소
             },
             "무역·유통": {
-                "universities": 0.00,   # 학력 가중치 유지
-                "careers": 0.10,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": 0.05,      # 어학 가중치 증가
-                "activities": -0.20     # 활동 가중치 감소
+                "universities": 0.05,   # 학력 가중치 유지
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": -0.03,  # 자격증 가중치 증가
+                "languages": -0.03,     # 어학 가중치 증가
+                "activities": -0.04     # 활동 가중치 감소
             },
             "인터넷·IT": {
                 "universities": 0.00,   # 학력 가중치 유지
                 "careers": 0.10,        # 경력 가중치 증가
-                "certificates": 0.10,   # 자격증 가중치 증가
-                "languages": -0.05,     # 어학 가중치 감소
-                "activities": -0.15     # 활동 가중치 감소
+                "certificates": -0.05,  # 자격증 가중치 증가
+                "languages": -0.10,     # 어학 가중치 감소
+                "activities": 0.05      # 활동 가중치 감소
             },
             "생산·제조": {
                 "universities": -0.05,  # 학력 가중치 감소
@@ -66,11 +64,11 @@ class SpecEvaluator:
                 "activities": -0.05     # 활동 가중치 감소
             },
             "영업·고객상담": {
-                "universities": -0.10,  # 학력 가중치 크게 감소
-                "careers": 0.10,        # 경력 가중치 증가
-                "certificates": 0.00,   # 자격증 가중치 유지
-                "languages": 0.10,      # 어학 가중치 증가
-                "activities": -0.10     # 활동 가중치 감소
+                "universities": 0.10,   # 학력 가중치 크게 감소
+                "careers": 0.05,        # 경력 가중치 증가
+                "certificates": -0.06,  # 자격증 가중치 유지
+                "languages": -0.06,     # 어학 가중치 증가
+                "activities": -0.03     # 활동 가중치 감소
             },
             "건설": {
                 "universities": 0.00,   # 학력 가중치 유지
@@ -82,16 +80,16 @@ class SpecEvaluator:
             "금융": {
                 "universities": 0.10,   # 학력 가중치 증가
                 "careers": 0.05,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": 0.00,      # 어학 가중치 유지
-                "activities": -0.20     # 활동 가중치 감소
+                "certificates": -0.6,   # 자격증 가중치 증가
+                "languages": -0.06,      # 어학 가중치 유지
+                "activities": -0.03     # 활동 가중치 감소
             },
             "연구개발·설계": {
-                "universities": 0.15,   # 학력 가중치 크게 증가
-                "careers": 0.05,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.05,     # 어학 가중치 감소
-                "activities": -0.20     # 활동 가중치 감소
+                "universities": -0.06,   # 학력 가중치 크게 증가
+                "careers": -0.11,        # 경력 가중치 증가
+                "certificates": 0.09,   # 자격증 가중치 증가
+                "languages": 0.09,     # 어학 가중치 감소
+                "activities": -0.02     # 활동 가중치 감소
             },
             "디자인": {
                 "universities": -0.05,  # 학력 가중치 감소
@@ -108,16 +106,16 @@ class SpecEvaluator:
                 "activities": 0.00      # 활동 가중치 유지
             },
             "전문·특수직": {
-                "universities": 0.10,   # 학력 가중치 증가
-                "careers": 0.05,        # 경력 가중치 증가
+                "universities": 0.05,   # 학력 가중치 증가
+                "careers": 0.00,        # 경력 가중치 증가
                 "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": 0.00,      # 어학 가중치 유지
-                "activities": -0.20     # 활동 가중치 감소
+                "languages": -0.10,      # 어학 가중치 유지
+                "activities": 0.00     # 활동 가중치 감소
             }
         }
         
         # 점수 정규화 파라미터 - 기존과 동일
-        self.min_score = 50  # 최소 점수
+        self.min_score = 40  # 최소 점수
         self.max_score = 95  # 최대 점수
         
         # 캐시 통계 - 기존과 동일
@@ -329,7 +327,100 @@ class SpecEvaluator:
         total_weight = sum(weights.values())
         for key in weights:
             weights[key] /= total_weight
-        
+        # 최종학력 평가 추가
+        final_edu = spec_data.get("final_edu", "")
+        final_status = spec_data.get("final_status", "")
+        final_edu_score = 0
+
+        # 최종학력 기본 점수 설정
+        if "대학원" in final_edu:
+            final_edu_score = 95  # 대학원
+        elif "대학교" in final_edu and not "2_3년제" in final_edu:
+            final_edu_score = 85  # 4년제 대학교
+        elif "2_3년제" in final_edu:
+            final_edu_score = 80  # 2_3년제 대학교
+        elif "고등학교" in final_edu:
+            final_edu_score = 75  # 고등학교
+        elif "중학교" in final_edu:
+            final_edu_score = 65  # 중학교
+        else:
+            final_edu_score = 70  # 기타 학력
+
+        # 학력 상태에 따른 조정
+        if "졸업" in final_status:
+            final_edu_score *= 1.0    # 졸업: 100% 점수
+        elif "수료" in final_status:
+            final_edu_score *= 0.95   # 수료: 95% 점수
+        elif "재학" in final_status:
+            final_edu_score *= 0.9    # 재학: 90% 점수
+        elif "휴학" in final_status:
+            final_edu_score *= 0.85   # 휴학: 85% 점수
+        elif "중퇴" in final_status:
+            final_edu_score *= 0.8    # 중퇴: 80% 점수
+
+        # 직무에 따른 학력 중요도 조정
+        if job == "연구개발·설계":
+            final_edu_score *= 1.2    # 연구개발 분야는 학력 매우 중요
+        elif job == "금융":
+            final_edu_score *= 1.15   # 금융 분야는 학력 중요
+        elif job == "전문·특수직":
+            final_edu_score *= 1.1    # 전문직은 학력 중요
+        elif job == "인터넷·IT":
+            final_edu_score *= 1.05   # IT 분야는 학력 약간 중요
+        elif job == "디자인" or job == "미디어":
+            final_edu_score *= 0.9    # 디자인, 미디어는 학력보다 실무능력 중요
+        elif job == "영업·고객상담":
+            final_edu_score *= 0.85   # 영업은 학력보다 영업력이 중요
+
+        # 점수 상한 설정
+        final_edu_score = min(100, final_edu_score)
+        scores["final_edu"] = final_edu_score
+
+        # 가중치에 final_edu 추가 (기존 가중치 합을 유지하기 위해 다른 가중치 조정)
+        # 기존 가중치 합계
+        original_weight_sum = sum(weights.values())
+
+        # 최종학력 가중치 추가
+        weights["final_edu"] = 0.15
+
+        # 다른 가중치 비례 조정해서 합계가 1이 되도록
+        scaling_factor = (1 - weights["final_edu"]) / original_weight_sum
+        for key in list(weights.keys()):
+            if key != "final_edu":
+                weights[key] *= scaling_factor
+
+        # 최종학력 기본 점수
+        if "박사" in final_edu:
+            final_edu_score = 95
+        elif "석사" in final_edu:
+            final_edu_score = 90
+        elif "학사" in final_edu or "대학교" in final_edu:
+            final_edu_score = 85
+        elif "전문학사" in final_edu or "전문대" in final_edu:
+            final_edu_score = 80
+        elif "고등학교" in final_edu:
+            final_edu_score = 75
+        else:
+            final_edu_score = 70
+
+        # 학력 상태에 따른 조정
+        if "졸업" in final_status:
+            final_edu_score *= 1.0
+        elif "재학" in final_status:
+            final_edu_score *= 0.9
+        elif "휴학" in final_status:
+            final_edu_score *= 0.85
+        elif "중퇴" in final_status:
+            final_edu_score *= 0.8
+
+        # 직무에 따른 학력 중요도 조정
+        if job == "연구개발·설계" or job == "금융":
+            final_edu_score *= 1.2  # 연구직, 금융직은 학력 중요성 높음
+        elif job == "디자인" or job == "미디어":
+            final_edu_score *= 0.9  # 디자인, 미디어는 학력보다 실무능력 중요
+            
+        scores["final_edu"] = final_edu_score
+        weights["final_edu"] = 0.2  # 가중치 추가 (다른 가중치 조정 필요)
         # 학력 평가
         uni_score = 0
         if "universities" in spec_data and spec_data["universities"]:
@@ -340,10 +431,10 @@ class SpecEvaluator:
                 school_score = 0
                 school_name = uni.get("school_name", "").lower()
                 
-                # 학교 이름 기반 점수 (단순화된 예시)
+                # 학교 이름 기반 점수
                 if "서울대" in school_name or "연세대" in school_name or "고려대" in school_name:
                     school_score = 95
-                elif "성균관대" in school_name or "한양대" in school_name:
+                elif "서강대" in school_name or "성균관대" in school_name or "한양대" in school_name:
                     school_score = 90
                 elif "중앙대" in school_name or "경희대" in school_name or "이화여대" in school_name:
                     school_score = 85
@@ -513,7 +604,7 @@ class SpecEvaluator:
                 company = career.get("company", "").lower()
                 role = career.get("role", "").lower()
                 
-                # 회사 규모/인지도 점수 (단순화)
+                # 회사 규모/인지도 점수
                 company_score = 0
                 if "삼성" in company or "네이버" in company or "카카오" in company or "lg" in company:
                     company_score = 95
