@@ -17,6 +17,33 @@ class SpecEvaluator:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
         
+        # 디바이스 설정 추가
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        
+        # KV 캐시 활성화 여부 추가
+        self.use_kv_cache = True
+        
+        # 캐시 설정 추가
+        self.use_redis = use_redis
+        self.cache_ttl = cache_ttl
+        self.memory_cache = {}  # 메모리 캐시 초기화
+
+        # Redis 캐시 설정 추가
+        if self.use_redis:
+            try:
+                self.redis_client = redis.Redis(
+                    host=redis_host,
+                    port=redis_port,
+                    db=redis_db,
+                    decode_responses=True
+                )
+                print("Redis 캐시 연결 성공")
+            except Exception as e:
+                print(f"Redis 캐시 연결 실패: {e}")
+                self.use_redis = False
+                print("메모리 캐시로 대체합니다.")
+        
         # 기본 평가 가중치 설정 (각 항목별 중요도)
         self.weights = {
             "universities": 0.3,  # 학력
@@ -29,8 +56,8 @@ class SpecEvaluator:
         # 직무별 가중치 조정값 (기본 가중치에 가감)
         self.job_weights = {
             "경영·사무": {
-                "universities": 0.00,   # 학력 가중치 증가
-                "careers": -0.05,       # 경력 가중치 증가
+                "universities": 0.00,   # 학력 가중치 유지
+                "careers": -0.05,       # 경력 가중치 감소
                 "certificates": 0.04,   # 자격증 가중치 증가
                 "languages": 0.04,      # 어학 가중치 증가
                 "activities": -0.03     # 활동 가중치 감소
@@ -40,55 +67,55 @@ class SpecEvaluator:
                 "careers": 0.02,        # 경력 가중치 증가
                 "certificates": 0.00,   # 자격증 가중치 유지
                 "languages": 0.02,      # 어학 가중치 증가
-                "activities": 0.01      # 활동 가중치 감소
+                "activities": 0.01      # 활동 가중치 증가
             },
             "무역·유통": {
-                "universities": 0.05,   # 학력 가중치 유지
+                "universities": 0.05,   # 학력 가중치 증가
                 "careers": 0.05,        # 경력 가중치 증가
-                "certificates": -0.03,  # 자격증 가중치 증가
-                "languages": -0.03,     # 어학 가중치 증가
+                "certificates": -0.03,  # 자격증 가중치 감소
+                "languages": -0.03,     # 어학 가중치 감소
                 "activities": -0.04     # 활동 가중치 감소
             },
             "인터넷·IT": {
                 "universities": 0.00,   # 학력 가중치 유지
                 "careers": 0.10,        # 경력 가중치 증가
-                "certificates": -0.05,  # 자격증 가중치 증가
+                "certificates": -0.05,  # 자격증 가중치 감소
                 "languages": -0.10,     # 어학 가중치 감소
-                "activities": 0.05      # 활동 가중치 감소
+                "activities": 0.05      # 활동 가중치 증가
             },
             "생산·제조": {
                 "universities": -0.05,  # 학력 가중치 감소
-                "careers": 0.15,        # 경력 가중치 크게 증가
+                "careers": 0.15,        # 경력 가중치 증가
                 "certificates": 0.05,   # 자격증 가중치 증가
                 "languages": -0.10,     # 어학 가중치 감소
                 "activities": -0.05     # 활동 가중치 감소
             },
             "영업·고객상담": {
-                "universities": 0.10,   # 학력 가중치 크게 감소
+                "universities": 0.10,   # 학력 가중치 증가
                 "careers": 0.05,        # 경력 가중치 증가
-                "certificates": -0.06,  # 자격증 가중치 유지
-                "languages": -0.06,     # 어학 가중치 증가
+                "certificates": -0.06,  # 자격증 가중치 감소
+                "languages": -0.06,     # 어학 가중치 감소
                 "activities": -0.03     # 활동 가중치 감소
             },
             "건설": {
                 "universities": 0.00,   # 학력 가중치 유지
-                "careers": 0.15,        # 경력 가중치 크게 증가
+                "careers": 0.15,        # 경력 가중치 증가
                 "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.15,     # 어학 가중치 크게 감소
+                "languages": -0.15,     # 어학 가중치 감소
                 "activities": -0.05     # 활동 가중치 감소
             },
             "금융": {
                 "universities": 0.10,   # 학력 가중치 증가
                 "careers": 0.05,        # 경력 가중치 증가
-                "certificates": -0.6,   # 자격증 가중치 증가
-                "languages": -0.06,      # 어학 가중치 유지
+                "certificates": -0.06,   # 자격증 가중치 감소
+                "languages": -0.06,     # 어학 가중치 감소
                 "activities": -0.03     # 활동 가중치 감소
             },
             "연구개발·설계": {
-                "universities": -0.06,   # 학력 가중치 크게 증가
-                "careers": -0.11,        # 경력 가중치 증가
+                "universities": -0.06,  # 학력 가중치 감소
+                "careers": -0.11,       # 경력 가중치 감소
                 "certificates": 0.09,   # 자격증 가중치 증가
-                "languages": 0.09,     # 어학 가중치 감소
+                "languages": 0.09,      # 어학 가중치 증가
                 "activities": -0.02     # 활동 가중치 감소
             },
             "디자인": {
@@ -107,31 +134,28 @@ class SpecEvaluator:
             },
             "전문·특수직": {
                 "universities": 0.05,   # 학력 가중치 증가
-                "careers": 0.00,        # 경력 가중치 증가
+                "careers": 0.00,        # 경력 가중치 유지
                 "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.10,      # 어학 가중치 유지
-                "activities": 0.00     # 활동 가중치 감소
+                "languages": -0.10,     # 어학 가중치 감소
+                "activities": 0.00      # 활동 가중치 유지
             }
         }
         
-        # 점수 정규화 파라미터 - 기존과 동일
+        # 점수 정규화 파라미터
         self.min_score = 40  # 최소 점수
         self.max_score = 95  # 최대 점수
         
-        # 캐시 통계 - 기존과 동일
+        # 캐시 통계
         self.cache_hits = 0
         self.cache_misses = 0
         
         print("모델 초기화 완료!")
-
-    def _prepare_prompt_wrapper(self, spec_data_json):
-        """JSON 문자열을 딕셔너리로 변환 후 실제 프롬프트 준비 함수 호출"""
-        spec_data = json.loads(spec_data_json)
-        return self._prepare_prompt_uncached(spec_data)
     
-    def _prepare_prompt_uncached(self, spec_data):
+    def prepare_prompt(self, spec_data):
         """스펙 데이터를 평가하기 위한 프롬프트 준비"""
         # 지원직종에 따른 맞춤형 프롬프트 생성
+        if isinstance(spec_data, str):
+            spec_data = json.loads(spec_data)
         job = spec_data.get("desired_job", "일반")
         
         # 지원직종에 따른 맞춤형 프롬프트 생성
@@ -344,7 +368,7 @@ class SpecEvaluator:
         elif "중학교" in final_edu:
             final_edu_score = 65  # 중학교
         else:
-            final_edu_score = 70  # 기타 학력
+            final_edu_score = 65  # 기타 학력
 
         # 학력 상태에 따른 조정
         if "졸업" in final_status:
@@ -379,48 +403,12 @@ class SpecEvaluator:
         # 가중치에 final_edu 추가 (기존 가중치 합을 유지하기 위해 다른 가중치 조정)
         # 기존 가중치 합계
         original_weight_sum = sum(weights.values())
-
-        # 최종학력 가중치 추가
         weights["final_edu"] = 0.15
-
-        # 다른 가중치 비례 조정해서 합계가 1이 되도록
         scaling_factor = (1 - weights["final_edu"]) / original_weight_sum
         for key in list(weights.keys()):
             if key != "final_edu":
                 weights[key] *= scaling_factor
 
-        # 최종학력 기본 점수
-        if "박사" in final_edu:
-            final_edu_score = 95
-        elif "석사" in final_edu:
-            final_edu_score = 90
-        elif "학사" in final_edu or "대학교" in final_edu:
-            final_edu_score = 85
-        elif "전문학사" in final_edu or "전문대" in final_edu:
-            final_edu_score = 80
-        elif "고등학교" in final_edu:
-            final_edu_score = 75
-        else:
-            final_edu_score = 70
-
-        # 학력 상태에 따른 조정
-        if "졸업" in final_status:
-            final_edu_score *= 1.0
-        elif "재학" in final_status:
-            final_edu_score *= 0.9
-        elif "휴학" in final_status:
-            final_edu_score *= 0.85
-        elif "중퇴" in final_status:
-            final_edu_score *= 0.8
-
-        # 직무에 따른 학력 중요도 조정
-        if job == "연구개발·설계" or job == "금융":
-            final_edu_score *= 1.2  # 연구직, 금융직은 학력 중요성 높음
-        elif job == "디자인" or job == "미디어":
-            final_edu_score *= 0.9  # 디자인, 미디어는 학력보다 실무능력 중요
-            
-        scores["final_edu"] = final_edu_score
-        weights["final_edu"] = 0.2  # 가중치 추가 (다른 가중치 조정 필요)
         # 학력 평가
         uni_score = 0
         if "universities" in spec_data and spec_data["universities"]:
@@ -603,7 +591,7 @@ class SpecEvaluator:
             for career in spec_data["careers"]:
                 company = career.get("company", "").lower()
                 role = career.get("role", "").lower()
-                
+
                 # 회사 규모/인지도 점수
                 company_score = 0
                 if "삼성" in company or "네이버" in company or "카카오" in company or "lg" in company:
@@ -736,14 +724,18 @@ class SpecEvaluator:
                     else:
                         role_score = 75
                 
-                # 근무 기간 가중치 (work_month 반영)
+                # 근무 기간 가중치 
                 work_month = career.get("work_month", 0)
                 experience_weight = 1.0  # 기본값
                 
                 # 근무 기간에 따른 가중치 (로그 스케일로 점진적 증가)
                 if work_month:
-                    # 6개월 미만: 0.8, 6-12개월: 1.0, 12-24개월: 1.2, 24-36개월: 1.3, 36개월 이상: 1.5
-                    if work_month < 6:
+                    # 1개월 미만: 0.2, 3개월 미만 0.5, 6개월 미만: 0.8, 6-12개월: 1.0, 12-24개월: 1.2, 24-36개월: 1.3, 36개월 이상: 1.5
+                    if work_month < 1:
+                        experience_weight = 0.2
+                    elif work_month < 3:
+                        experience_weight = 0.5
+                    elif work_month < 6:
                         experience_weight = 0.8
                     elif work_month < 12:
                         experience_weight = 1.0
@@ -1144,7 +1136,7 @@ class SpecEvaluator:
         
         # 만약 모든 항목이 0점이면 기본 점수 반환
         if total_score == 0:
-            total_score = 65
+            total_score = 40
         
         # 점수 정규화 (좀 더 넓은 구간으로 분산)
         total_score = self.min_score + (total_score / 100) * (self.max_score - self.min_score)
@@ -1176,7 +1168,7 @@ class SpecEvaluator:
             # JSON 문자열로 변환하여 캐시 가능한 형태로 만듦
             spec_data_json = json.dumps(spec_data, sort_keys=True)
             # 프롬프트 생성
-            prompt = self.prepare_prompt_cached(spec_data_json)
+            prompt = self.prepare_prompt(spec_data)
             
             # 시작 시간 기록
             start_time = time.time()
