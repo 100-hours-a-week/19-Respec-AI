@@ -600,129 +600,20 @@ class SpecEvaluator:
                     company_score = 85
                 else:
                     company_score = 75
-                
-                # 역할 관련성 점수
-                role_score = 0
-                
-                if job == "경영·사무":
-                    if "사무" in role or "총무" in role or "인사" in role or "행정" in role:
-                        role_score = 95
-                    elif "경영" in role or "관리" in role:
-                        role_score = 90
-                    elif "비서" in role or "사원" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "마케팅·광고·홍보":
-                    if "마케팅" in role or "광고" in role or "홍보" in role or "브랜드" in role:
-                        role_score = 95
-                    elif "기획" in role or "카피" in role:
-                        role_score = 90
-                    elif "디지털" in role or "sns" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "무역·유통":
-                    if "무역" in role or "유통" in role or "물류" in role or "구매" in role:
-                        role_score = 95
-                    elif "수출" in role or "수입" in role:
-                        role_score = 90
-                    elif "통관" in role or "운송" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "인터넷·IT":
-                    if "개발" in role or "프로그래머" in role or "엔지니어" in role:
-                        role_score = 95
-                    elif "웹" in role or "앱" in role or "서버" in role:
-                        role_score = 90
-                    elif "디자인" in role or "기획" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "생산·제조":
-                    if "생산" in role or "제조" in role or "공정" in role:
-                        role_score = 95
-                    elif "품질" in role or "관리" in role:
-                        role_score = 90
-                    elif "조립" in role or "검사" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "영업·고객상담":
-                    if "영업" in role or "세일즈" in role or "판매" in role:
-                        role_score = 95
-                    elif "상담" in role or "고객" in role or "cs" in role:
-                        role_score = 90
-                    elif "매장" in role or "관리" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "건설":
-                    if "건설" in role or "현장" in role or "공사" in role:
-                        role_score = 95
-                    elif "감리" in role or "설계" in role:
-                        role_score = 90
-                    elif "안전" in role or "관리" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "금융":
-                    if "금융" in role or "은행" in role or "투자" in role:
-                        role_score = 95
-                    elif "회계" in role or "경리" in role:
-                        role_score = 90
-                    elif "자산" in role or "관리" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "연구개발·설계":
-                    if "연구" in role or "개발" in role or "r&d" in role:
-                        role_score = 95
-                    elif "설계" in role or "디자인" in role:
-                        role_score = 90
-                    elif "분석" in role or "기술" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "디자인":
-                    if "디자인" in role or "그래픽" in role or "ui" in role or "ux" in role:
-                        role_score = 95
-                    elif "일러스트" in role or "시각" in role:
-                        role_score = 90
-                    elif "편집" in role or "웹" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "미디어":
-                    if "미디어" in role or "방송" in role or "pd" in role or "기자" in role:
-                        role_score = 95
-                    elif "영상" in role or "촬영" in role:
-                        role_score = 90
-                    elif "편집" in role or "작가" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
-                
-                elif job == "전문·특수직":
-                    if "의사" in role or "변호사" in role or "회계사" in role or "교수" in role:
-                        role_score = 95
-                    elif "교사" in role or "전문가" in role:
-                        role_score = 90
-                    elif "약사" in role or "상담사" in role:
-                        role_score = 85
-                    else:
-                        role_score = 75
+
+                # 역할 점수 및 가중치
+                role_score = 40  # 기본값
+                employment_type_weight = 1.0  # 기본값
+                # 역할 가중치
+                if role == "인턴":
+                    role_score = 75
+                    employment_type_weight = 0.7
+                elif role == "정규직":
+                    role_score = 85
+                    employment_type_weight = 1.0
+                elif role == "대표":
+                    role_score = 95
+                    employment_type_weight = 1.3
                 
                 # 근무 기간 가중치 
                 work_month = career.get("work_month", 0)
@@ -746,13 +637,14 @@ class SpecEvaluator:
                     else:
                         experience_weight = 1.5
                 
-                # 경력 점수 계산 (회사 30%, 역할 50%, 경력 기간 20%)
-                career_item_score = (company_score * 0.3 + role_score * 0.5) * experience_weight
+                # 경력 점수 계산
+                career_item_score = (company_score * 0.4 + role_score * 0.4) * experience_weight * employment_type_weight
                 career_score += career_item_score
             
             # 여러 경력이 있을 경우 평균
             career_score = career_score / career_count
-        
+            # 점수 범위 제한 (0~100)
+            career_score = max(0, min(100, career_score))
         scores["careers"] = career_score
         # 자격증 평가
         cert_score = 0
