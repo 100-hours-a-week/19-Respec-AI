@@ -1,164 +1,196 @@
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-import os, time, redis    
+from pydantic import BaseModel
+import os, time
 import uvicorn
-from datetime import datetime
-from model import SpecEvaluator
-from batch_processing import BatchProcessor
+import easyocr
+import pdf2image
+import cv2
+import numpy as np
+from io import BytesIO
+import tempfile
+
 # FastAPI 애플리케이션 인스턴스 생성
-app = FastAPI(title="Spec Score API")
+app = FastAPI(title="Spec Score OCR API V2")
 
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 모든 오리진 허용 (프로덕션에서는 제한 필요)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Redis 환경 변수 설정
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").lower() == "true"
-
-# 캐시 TTL 설정 (24시간)
-CACHE_TTL = 86400
-
-# 모델 초기화
-evaluator = SpecEvaluator(
-    use_redis=REDIS_ENABLED,
-    redis_host=REDIS_HOST,
-    redis_port=REDIS_PORT,
-    redis_db=REDIS_DB,
-    cache_ttl=CACHE_TTL
-)
-
-batch_processor = BatchProcessor(evaluator, batch_size=10, max_workers=4)
-
-# Redis 클라이언트 초기화 (포트폴리오 텍스트 캐싱용)
-redis_client = None
-if REDIS_ENABLED:
-    try:
-        redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB + 1,  # 모델 캐시와 다른 DB 사용
-            decode_responses=True
-        )
-        print("Redis 포트폴리오 캐시 연결 성공")
-    except Exception as e:
-        print(f"Redis 포트폴리오 캐시 연결 실패: {e}")
-        redis_client = None
+# EasyOCR 초기화
+reader = easyocr.Reader(['ko', 'en'])
 
 # ──────────────────────────
-# 1) Pydantic 모델 정의
+# Pydantic 모델 정의
 # ──────────────────────────
-class University(BaseModel):
-    # 학교 이름
-    school_name: str
-    # 학위 (Optional)
-    degree: Optional[str]
-    # 전공 (Optional)
-    major: Optional[str]
-    # 평점 (Optional)
-    gpa: Optional[float]
-    # 평점 최대값 (Optional)
-    gpa_max: Optional[float]
+class OCRResult(BaseModel):
+    page: int
+    text: str
+    confidence: float
+    position: List[List[int]]
 
-class Career(BaseModel):
-    # 회사 이름
-    company: str
-    # 직책/역할 (Optional)
-    role: Optional[str]
-    # 근무 개월 (Optional)
-    work_month: Optional[int]
-
-class Language(BaseModel):
-    # 시험 종류 (예: TOEIC, TOEFL 등)
-    test: str
-    # 점수 또는 등급
-    score_or_grade: str
-
-class Activity(BaseModel):
-    # 활동 이름
-    name: str
-    # 역할 (Optional)
-    role: Optional[str]
-    # 수상 내역 (Optional)
-    award: Optional[str]
-
-class SpecV1(BaseModel):
-    # 지원자 닉네임
-    nickname: str
-    # 최종 학력
-    final_edu: str
-    # 학력 상태 (예: 졸업, 재학 등)
-    final_status: str
-    # 지원 직종
-    desired_job: str
-    # 대학 정보 리스트
-    universities: Optional[List[University]]  = []
-    # 경력 정보 리스트
-    careers:     Optional[List[Career]]      = []
-    # 자격증 리스트
-    certificates: Optional[List[str]]        = []
-    # 어학 정보 리스트
-    languages:   Optional[List[Language]]    = []
-    # 활동 정보 리스트
-    activities:  Optional[List[Activity]]    = []
-
-class SpecV1Respone(BaseModel):
-    # 지원자 닉네임
-    nickname: str 
-    # 총점
-    totalScore: float
+class OCRResponse(BaseModel):
+    success: bool
+    message: str
+    elapsed_time: float
+    results: List[List[OCRResult]]
 
 class ErrorResponse(BaseModel):
-    # 오류 메시지
-    message: str = Field
-# ──────────────────────────
-# 2) 점수 계산 함수
-# ──────────────────────────
-@app.post(
-        "/spec/v1/post", 
-    response_model=SpecV1Respone,
-    responses={
-        400: {"model": ErrorResponse},
-        500: {"model": ErrorResponse}
-    },
-    tags=["스펙 평가"]
-)
-async def evaluate_spec_v1(spec_data: SpecV1):
+    success: bool = False
+    message: str
+    error_type: Optional[str] = None
+
+# Route for the test page
+@app.get("/", response_class=HTMLResponse)
+async def get_test_page(request: Request):
     """
-    V1 API: 사용자의 학력, 경력, 자격증 등의 스펙 정보를 받아 평가합니다.
+    OCR 테스트를 위한 웹 인터페이스를 제공합니다.
     """
+    with open("templates/ocr_test.html", "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
+
+@app.post("/api/v2/ocr/pdf", response_model=OCRResponse)
+async def ocr_pdf(file: UploadFile = File(...)):
+    """
+    PDF 문서에서 텍스트를 추출하여 반환합니다.
+    
+    - **file**: PDF 파일 (multipart/form-data)
+    - **returns**: 페이지별 OCR 결과와 텍스트 위치 정보
+    """
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(
+            status_code=400, 
+            detail={"success": False, "message": "PDF 파일만 업로드 가능합니다."}
+        )
+    
     try:
-        # 요청 시간 기록
         start_time = time.time()
         
-        # SpecEvaluator를 사용하여 평가
-        result = evaluator.predict(spec_data.dict())
+        # 임시 파일로 PDF 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+            content = await file.read()
+            temp_pdf.write(content)
+            temp_pdf_path = temp_pdf.name
+
+        # PDF를 이미지로 변환
+        images = pdf2image.convert_from_path(temp_pdf_path)
+        results = []
+
+        for i, image in enumerate(images):
+            # 이미지 전처리
+            image_np = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            image_np = cv2.GaussianBlur(image_np, (5, 5), 0)
+            image_np = cv2.threshold(image_np, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+            
+            # OCR 수행
+            detections = reader.readtext(image_np)
+            
+            # 결과 변환
+            page_results = []
+            for bbox, text, confidence in detections:
+                result = OCRResult(
+                    page=i+1,
+                    text=text,
+                    confidence=confidence,
+                    position=[[int(x) for x in point] for point in bbox]
+                )
+                page_results.append(result)
+            
+            results.append(page_results)
+
+        # 임시 파일 삭제
+        os.unlink(temp_pdf_path)
         
-        # 응답 시간 계산 및 로깅
         elapsed_time = time.time() - start_time
-        print(f"[V1] {spec_data.nickname}의 평가 완료, 소요 시간: {elapsed_time:.2f}초")
+        print(f"[OCR] PDF 처리 완료: {file.filename}, 소요 시간: {elapsed_time:.2f}초")
         
-        return result
-    except Exception as e:
-        # 오류 로깅
-        print(f"[V1] 평가 오류: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"서버에서 예기치 못한 오류가 발생했습니다: {str(e)}"
+        return OCRResponse(
+            success=True,
+            message="PDF 처리가 완료되었습니다.",
+            elapsed_time=elapsed_time,
+            results=results
         )
 
-# ──────────────────────────
-# 3) 서버 실행
-# ──────────────────────────
+    except Exception as e:
+        print(f"[OCR] 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "message": "PDF 처리 중 오류가 발생했습니다.",
+                "error_type": str(type(e).__name__)
+            }
+        )
+
+@app.post("/api/v2/ocr/image", response_model=OCRResponse)
+async def ocr_image(file: UploadFile = File(...)):
+    """
+    이미지에서 텍스트를 추출하여 반환합니다.
+    
+    - **file**: 이미지 파일 (PNG, JPG, JPEG, TIFF, BMP)
+    - **returns**: OCR 결과와 텍스트 위치 정보
+    """
+    if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp')):
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "message": "지원되는 이미지 형식만 업로드 가능합니다."}
+        )
+    
+    try:
+        start_time = time.time()
+        
+        # 이미지 읽기
+        content = await file.read()
+        nparr = np.frombuffer(content, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        # 이미지 전처리
+        image = cv2.GaussianBlur(image, (5, 5), 0)
+        image = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        
+        # OCR 수행
+        detections = reader.readtext(image)
+        
+        # 결과 변환
+        results = [[]]  # 단일 페이지를 2D 리스트로 변환
+        for bbox, text, confidence in detections:
+            result = OCRResult(
+                page=1,
+                text=text,
+                confidence=confidence,
+                position=[[int(x) for x in point] for point in bbox]
+            )
+            results[0].append(result)
+        
+        elapsed_time = time.time() - start_time
+        print(f"[OCR] 이미지 처리 완료: {file.filename}, 소요 시간: {elapsed_time:.2f}초")
+        
+        return OCRResponse(
+            success=True,
+            message="이미지 처리가 완료되었습니다.",
+            elapsed_time=elapsed_time,
+            results=results
+        )
+
+    except Exception as e:
+        print(f"[OCR] 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "message": "이미지 처리 중 오류가 발생했습니다.",
+                "error_type": str(type(e).__name__)
+            }
+        )
+
 if __name__ == "__main__":
-    # 개발 모드로 실행 (reload=True)
-    uvicorn.run("test:app", host="0.0.0.0", port=8000, reload=True)
+    print("OCR 서버가 시작됩니다...")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
