@@ -75,7 +75,8 @@ class ResumeEvaluationSystem:
             
         context = {
             'education_matches': [],
-            'university_matches': []
+            'university_matches': [],
+            'activity_matches': []
         }
         
         # 전공과 대학교 정보 수집
@@ -92,6 +93,14 @@ class ResumeEvaluationSystem:
                     matches = self.vector_db.search_similar_majors(univ['major'], job_field, top_k=1)
                     if matches:
                         context['education_matches'].extend(matches)
+        
+        # 활동 정보 수집
+        if spec_data.get('activities'):
+            for activity in spec_data['activities']:
+                if activity.get('name'):
+                    activity_matches = self.vector_db.search_similar_activities(activity['name'], job_field, top_k=1)
+                    if activity_matches:
+                        context['activity_matches'].extend(activity_matches)
         
         return context
     
