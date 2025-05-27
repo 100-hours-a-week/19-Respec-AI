@@ -3,12 +3,13 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 from sentence_transformers import SentenceTransformer
 import json
+from database_config import DatabaseConfig
 
 class VectorDatabase:
     """벡터 데이터베이스 연결 및 검색 관리 클래스"""
     
-    def __init__(self, db_config: Dict):
-        self.db_config = db_config
+    def __init__(self):
+        self.db_config = DatabaseConfig().get_config()
         self.conn = None
         self._connect()
         self.embedding_model = SentenceTransformer('jhgan/ko-sroberta-multitask')

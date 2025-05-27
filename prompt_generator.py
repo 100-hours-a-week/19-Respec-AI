@@ -47,6 +47,7 @@ class PromptGenerator:
 • 학력 영역 ({weights[0]}점 만점)
   - 전공 적합성: 0~{float(weights[0])*float(weights[1]):.2f}점
   - 학점/학교: 0~{float(weights[0])*float(weights[2]):.2f}점
+  * 학점 점수 = 학점/학교 만점 × (실제 학점/만점 학점)
 
 • 자격증 영역 ({weights[3]}점 만점)
   - 직무 관련성: 0~{float(weights[3])*float(weights[4]):.2f}점
@@ -63,7 +64,13 @@ class PromptGenerator:
   - 직무 관련성: 0~{float(weights[10])*float(weights[11]):.2f}점
   - 역할/성과: 0~{float(weights[10])*float(weights[12]):.2f}점
 
-총점 = 40 + 학력점수 + 자격증점수 + 경력점수 + 어학점수 + 활동점수
+=== 점수 계산 주의사항 ===
+1. 기본 점수는 정확히 40점입니다.
+2. 각 영역의 점수는 해당 영역의 만점을 초과할 수 없습니다.
+3. 최종 점수는 반드시 아래 공식으로 계산하세요:
+   최종 점수 = 40 + min(학력점수, {weights[0]}) + min(자격증점수, {weights[3]}) + min(경력점수, {weights[6]}) + min(어학점수, {weights[9]}) + min(활동점수, {weights[10]})
+4. 계산기를 사용하여 정확한 덧셈을 수행하세요.
+5. 계산 과정을 단계별로 나누어 진행하세요.
 
 반드시 아래 JSON 형식으로만 답변하세요:
 {{"totalScore": 85.75}}

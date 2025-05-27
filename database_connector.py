@@ -1,25 +1,15 @@
 import psycopg2
-from dotenv import load_dotenv
-import os
+from database_config import DatabaseConfig
 
 class DatabaseConnector:
     """데이터베이스 연결 및 쿼리 실행을 담당하는 클래스"""
     def __init__(self):
-        load_dotenv()
-        self.host = os.getenv('HOST')
-        self.database = os.getenv('DATABASE')
-        self.user = os.getenv('USER')
-        self.password = os.getenv('PASSWORD')
+        self.db_config = DatabaseConfig().get_config()
     
     def connect(self):
         """데이터베이스에 연결하고 커넥션 객체 반환"""
         try:
-            conn = psycopg2.connect(
-                host=self.host,
-                database=self.database,
-                user=self.user,
-                password=self.password
-            )
+            conn = psycopg2.connect(**self.db_config)
             return conn
         except Exception as e:
             print(f"데이터베이스 연결 오류: {e}")
