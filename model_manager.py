@@ -29,7 +29,7 @@ class ModelManager:
 
             output_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=10,
+                max_new_tokens=17,
                 do_sample=True,
                 temperature=0.1,
                 repetition_penalty=1.2,

@@ -9,7 +9,7 @@ class ResumeEvaluator:
         self.prompt_generator = prompt_generator
         self.score_parser = score_parser
     
-    def evaluate(self, user_resume, job_field):
+    def evaluate(self, user_resume, job_field, univ_name):
         """이력서 평가 수행"""
         start_time = time.time()
         
@@ -19,13 +19,12 @@ class ResumeEvaluator:
                 return "모델 로드 실패"
         
         # 2. 직무별 데이터 로드
-        weights, few_shot_examples, criteria = self.db_connector.load_job_specific_data(job_field)
-        
+        weights, few_shot_examples, criteria, university_ranking = self.db_connector.load_job_specific_data(job_field, univ_name)
         # 3. 직무별 프롬프트 생성
         system_prompt = self.prompt_generator.create_job_specific_prompt(
-            job_field, weights, few_shot_examples, criteria
+            job_field, weights, few_shot_examples, criteria, university_ranking
         )
-        
+
         # 4. 채팅 형식 구성
         chat = self.prompt_generator.create_chat_format(system_prompt, user_resume)
         
