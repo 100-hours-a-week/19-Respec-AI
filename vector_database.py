@@ -118,7 +118,37 @@ class VectorDatabase:
         except Exception as e:
             print(f"활동 검색 오류: {e}")
             return []
-    
+    def search_similar_universities(self, query: str, top_k: int = 1) -> List[Tuple]:
+        """유사한 대학교 검색 (임베딩 기반)"""
+        try:
+            query_embedding = self.embedding_model.encode(query)
+            cursor = self.conn.cursor()
+            # 코사인 유사도 기반 검색
+            search_query = """
+            SELECT university_name, score, rank_position,
+                  1 -  (name_embedding <=> %s::vector) as similarity
+            FROM university_rankings
+            ORDER BY similarity DESC
+            LIMIT %s;
+            """
+            
+            cursor.execute(search_query, (query_embedding.tolist(), top_k))
+            results = cursor.fetchall()
+            cursor.close()
+            
+            return [
+                {
+                    "university_name": row[0],
+                    "score": float(row[1]),
+                    "rank_position": row[2],
+                    "similarity": float(row[3])
+                }
+                for row in results
+            ]
+            
+        except Exception as e:
+            print(f"대학 검색 오류: {e}")
+            return []
     
     def close(self):
         """데이터베이스 연결 종료"""

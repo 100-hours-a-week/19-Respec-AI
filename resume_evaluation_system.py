@@ -29,12 +29,9 @@ class ResumeEvaluationSystem:
         try:
             # 기본 정보 준비
             job_field = spec_data['desired_job']
-            univ_name = spec_data.get('universities', [{}])[0].get('school_name', '')
             
             # DB에서 평가 데이터 로드
-            weights, examples, criteria, ranking = self.db_connector.load_job_specific_data(
-                job_field, univ_name
-            )
+            weights, criteria = self.db_connector.load_job_specific_data(job_field)
             
             # RAG 컨텍스트 준비 (가능한 경우)
             rag_context = self._prepare_rag_context(spec_data, job_field) if self.rag_enabled else {}
@@ -43,7 +40,7 @@ class ResumeEvaluationSystem:
             system_prompt = (
                 self.prompt_generator.create_rag_enhanced_prompt(job_field, weights, criteria, rag_context)
                 if rag_context else
-                self.prompt_generator.create_job_specific_prompt(job_field, weights, examples, criteria)
+                self.prompt_generator.create_job_specific_prompt(job_field, weights, criteria)
             )
             
             # 이력서 텍스트 생성 및 채팅 포맷 준비
@@ -76,37 +73,25 @@ class ResumeEvaluationSystem:
         if not self.rag_enabled:
             return {}
             
-        context = {}
+        context = {
+            'education_matches': [],
+            'university_matches': []
+        }
         
-        # 전공 검색
+        # 전공과 대학교 정보 수집
         if spec_data.get('universities'):
             for univ in spec_data['universities']:
+                # 대학교 검색
+                if univ.get('school_name'):
+                    uni_matches = self.vector_db.search_similar_universities(univ['school_name'], top_k=1)
+                    if uni_matches:
+                        context['university_matches'].extend(uni_matches)
+                
+                # 전공 검색
                 if univ.get('major'):
                     matches = self.vector_db.search_similar_majors(univ['major'], job_field, top_k=1)
                     if matches:
-                        context['education_matches'] = matches
-                        break
-        
-        # 자격증 검색
-        if spec_data.get('certificates'):
-            cert_matches = []
-            for cert in spec_data['certificates'][:3]:
-                matches = self.vector_db.search_similar_certificates(cert, job_field, top_k=1)
-                if matches:
-                    cert_matches.extend(matches)
-            if cert_matches:
-                context['certificate_matches'] = cert_matches
-        
-        # 활동 검색
-        if spec_data.get('activities'):
-            activity_matches = []
-            for activity in spec_data['activities'][:3]:
-                activity_text = f"{activity.get('name', '')} {activity.get('role', '')}"
-                matches = self.vector_db.search_similar_activities(activity_text, job_field, top_k=1)
-                if matches:
-                    activity_matches.extend(matches)
-            if activity_matches:
-                context['activity_matches'] = activity_matches
+                        context['education_matches'].extend(matches)
         
         return context
     

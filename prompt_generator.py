@@ -8,8 +8,28 @@ class PromptGenerator:
         # RAG 검색 결과 통합을 위한 설정
         self.similarity_threshold = 0.7
         self.max_rag_examples = 3
+        self.score_breakdown = {
+            "기본 점수": 40.0,
+            "전공": 0.0,
+            "학교": 0.0,
+            "자격증": 0.0,
+            "경력": 0.0,
+            "어학": 0.0,
+            "활동": 0.0
+        }
 
-    def create_job_specific_prompt(self, job_field, weights, few_shot_examples, criteria):
+    def print_score_breakdown(self):
+        """점수 분석 결과를 콘솔에 출력"""
+        print("\n=== 🎯 이력서 점수 분석 결과 ===")
+        total = 0.0
+        for category, score in self.score_breakdown.items():
+            print(f"📌 {category}: {score:.2f}점")
+            total += score
+        print("=" * 30)
+        print(f"📊 총점: {total:.2f}점")
+        print("=" * 30)
+
+    def create_job_specific_prompt(self, job_field, weights, criteria):
         """기존 직무별 특화 프롬프트 생성 (변경 없음)"""
         system_prompt = f"""{job_field} 지원분야 이력서를 벡터 검색 결과를 활용하여 100점 만점으로 평가하세요.
 === 평가 기준 ===
@@ -21,13 +41,6 @@ class PromptGenerator:
 2. 소수점 둘째 자리까지 정확히 계산
 3. 어떤 설명이나 추가 텍스트도 금지
 """
-
-        # # Few-shot 예제 추가
-        # if few_shot_examples:
-        #     examples = ""
-        #     for i, (example, score) in enumerate(few_shot_examples):
-        #         examples += f"\n\n예시 이력서 {i+1}:\n{example}\n총점: {score}"
-        #     system_prompt += examples
 
         return system_prompt
     
@@ -48,6 +61,11 @@ class PromptGenerator:
   - 전공 적합성: 0~{float(weights[0])*float(weights[1]):.2f}점
   - 학점/학교: 0~{float(weights[0])*float(weights[2]):.2f}점
   * 학점 점수 = 학점/학교 만점 × (실제 학점/만점 학점)
+  * 학교 점수 계산 기준:
+    - 상위 1-50위: 만점의 100%
+    - 상위 51-100위: 만점의 90%
+    - 상위 101-200위: 만점의 80%
+    - 그 외: 만점의 70%
 
 • 자격증 영역 ({weights[3]}점 만점)
   - 직무 관련성: 0~{float(weights[3])*float(weights[4]):.2f}점
@@ -88,23 +106,55 @@ class PromptGenerator:
                 
                 if similarity >= 0.9:
                     major_score = float(weights[0]) * float(weights[1])  # 만점
-                    system_prompt += f"\n📚 전공 점수: {major_score:.2f}점 (완벽 매칭)"
+                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (완벽 매칭)"
+                    self.score_breakdown["전공"] = major_score
                 elif similarity >= 0.7:
                     major_score = float(weights[0]) * float(weights[1]) * 0.8  # 80%
-                    system_prompt += f"\n📚 전공 점수: {major_score:.2f}점 (높은 적합성)"
+                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (높은 적합성)"
+                    self.score_breakdown["전공"] = major_score
                 elif similarity >= 0.5:
                     major_score = float(weights[0]) * float(weights[1]) * 0.5  # 50%
-                    system_prompt += f"\n📚 전공 점수: {major_score:.2f}점 (보통 적합성)"
+                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (보통 적합성)"
+                    self.score_breakdown["전공"] = major_score
                 else:
                     major_score = float(weights[0]) * float(weights[1]) * 0.2  # 20%
-                    system_prompt += f"\n📚 전공 점수: {major_score:.2f}점 (낮은 적합성)"
+                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (낮은 적합성)"
+                    self.score_breakdown["전공"] = major_score
                 break
         else:
             system_prompt += f"\n📚 전공 점수: 0점 (전공 정보 없음)"
+            self.score_breakdown["전공"] = 0.0
+        
+        # 대학교 랭킹 기반 점수 분석
+        if rag_context.get('university_matches'):
+            system_prompt += f"\n🎓 대학교 분석:"
+            for match in rag_context['university_matches'][:1]:  # top_k=1로 설정했으므로
+                rank = match.get('rank_position', 0)
+                university_name = match.get('university_name', '')
+                
+                if rank <= 50:
+                    uni_score = float(weights[0]) * float(weights[2])  # 만점
+                    system_prompt += f"\n {university_name} (상위 50위권): {uni_score:.2f}점"
+                    self.score_breakdown["학교"] = uni_score
+                elif rank <= 100:
+                    uni_score = float(weights[0]) * float(weights[2]) * 0.9
+                    system_prompt += f"\n {university_name} (상위 51-100위권): {uni_score:.2f}점"
+                    self.score_breakdown["학교"] = uni_score
+                elif rank <= 200:
+                    uni_score = float(weights[0]) * float(weights[2]) * 0.8
+                    system_prompt += f"\n {university_name} (상위 101-200위권): {uni_score:.2f}점"
+                    self.score_breakdown["학교"] = uni_score
+                else:
+                    uni_score = float(weights[0]) * float(weights[2]) * 0.7
+                    system_prompt += f"\n {university_name}: {uni_score:.2f}점"
+                    self.score_breakdown["학교"] = uni_score
+        else:
+            system_prompt += f"\n🎓 대학교 점수: 0점 (대학교 정보 없음)"
+            self.score_breakdown["학교"] = 0.0
         
         # 자격증 유사도 분석  
         if rag_context.get('certificate_matches'):
-            system_prompt += f"\n🏆 자격증 분석:"
+            system_prompt += f"\n자격증 분석:"
             total_cert_score = 0
             for match in rag_context['certificate_matches'][:3]:
                 similarity = match.get('similarity', 0)
@@ -121,8 +171,10 @@ class PromptGenerator:
             
             max_cert_score = min(total_cert_score, float(weights[3]))
             system_prompt += f"\n  📊 자격증 총점: {max_cert_score:.2f}점 (상한: {weights[3]}점)"
+            self.score_breakdown["자격증"] = max_cert_score
         else:
             system_prompt += f"\n🏆 자격증 점수: 0점 (자격증 없음)"
+            self.score_breakdown["자격증"] = 0.0
         
         # 활동 유사도 분석
         if rag_context.get('activity_matches'):
@@ -143,9 +195,13 @@ class PromptGenerator:
             
             max_activity_score = min(total_activity_score, float(weights[10]) * 0.7)
             system_prompt += f"\n  📊 활동 관련성: {max_activity_score:.2f}점"
+            self.score_breakdown["활동"] = max_activity_score
         else:
             system_prompt += f"\n🎯 활동 점수: 0점 (활동 내역 없음)"
+            self.score_breakdown["활동"] = 0.0
 
+        # 점수 분석 결과 출력
+        self.print_score_breakdown()
 
         # 평가 지시사항
         system_prompt += f"""
