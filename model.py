@@ -1,238 +1,247 @@
-from rag_evaluator import ResumeEvaluationRAG
-from prompt_generator import PromptGenerator
 from database_connector import DatabaseConnector
+from model_manager import ModelManager
+from prompt_generator import PromptGenerator
+from score_parser import ScoreParser
+from resume_evaluator import ResumeEvaluator
+from vector_database import VectorDatabase
 import os
 from dotenv import load_dotenv
 
 class SpecEvaluator:
     """
-    RAG 기반 스펙 평가를 담당하는 통합 클래스
-    기존 시스템과 RAG 시스템을 완전히 통합
+    RAG 기능이 통합된 간단하고 효과적인 스펙 평가기
+    기존 구조를 유지하면서 벡터 검색만 추가
     """
     
     def __init__(self):
-        """RAG 기반 평가 시스템으로 초기화"""
-        load_dotenv()
-        
-        # 벡터 데이터베이스 설정
-        db_config = {
-            'host': os.environ.get('HOST'),
-            'database': os.environ.get('DATABASE'), 
-            'user': os.environ.get('USER'),
-            'password': os.environ.get('PASSWORD'),
-            'port': os.environ.get('PORT', 5432)
-        }
-        
-        # RAG 평가 시스템 초기화
-        self.rag_evaluator = ResumeEvaluationRAG(db_config)
-        
-        # 프롬프트 생성기 초기화 (RAG 컨텍스트 활용용)
-        self.prompt_generator = PromptGenerator()
-        
-        # 기존 데이터베이스 커넥터 (가중치, 기준 정보용)
+        """기존 구조 유지하면서 벡터 DB만 추가"""
+        # 기존 시스템 초기화
         self.db_connector = DatabaseConnector()
+        self.model_manager = ModelManager()
+        self.prompt_generator = PromptGenerator()
+        self.score_parser = ScoreParser()
         
-        print("RAG 기반 SpecEvaluator 초기화 완료")
-    
-    def _format_resume_data(self, spec_data):
-        """SpecV1 API 데이터를 RAG 평가용 형식으로 변환"""
-        return {
-            'nickname': spec_data['nickname'],
-            'final_edu': spec_data['final_edu'],
-            'final_status': spec_data['final_status'],
-            'desired_job': spec_data['desired_job'],
-            'universities': spec_data.get('universities', []),
-            'careers': spec_data.get('careers', []),
-            'certificates': spec_data.get('certificates', []),
-            'languages': spec_data.get('languages', []),
-            'activities': spec_data.get('activities', [])
-        }
-    
-    def _create_rag_context_from_evaluation(self, evaluation_result):
-        """RAG 평가 결과에서 프롬프트용 컨텍스트 추출"""
-        component_scores = evaluation_result['component_scores']
+        self.evaluator = ResumeEvaluator(
+            self.db_connector, 
+            self.model_manager, 
+            self.prompt_generator,
+            self.score_parser
+        )
         
-        rag_context = {}
-        
-        # 학력 매칭 정보
-        if 'education' in component_scores and 'details' in component_scores['education']:
-            education_matches = []
-            for detail in component_scores['education']['details']:
-                if isinstance(detail, dict) and 'major' in detail:
-                    education_matches.append({
-                        'input_major': detail['major'],
-                        'matched_major': detail.get('matched_major', ''),
-                        'similarity': detail.get('similarity', 0),
-                        'relevance_score': detail.get('base_relevance', 0)
-                    })
-            rag_context['education_matches'] = education_matches
-        
-        # 자격증 매칭 정보  
-        if 'certificates' in component_scores and 'details' in component_scores['certificates']:
-            certificate_matches = []
-            for detail in component_scores['certificates']['details']:
-                if isinstance(detail, dict):
-                    certificate_matches.append({
-                        'input_certificate': detail.get('input_certificate', ''),
-                        'matched_certificate': detail.get('matched_certificate', ''),
-                        'similarity': detail.get('similarity', 0),
-                        'weight_score': detail.get('base_weight', 0)
-                    })
-            rag_context['certificate_matches'] = certificate_matches
-        
-        # 활동 매칭 정보
-        if 'activities' in component_scores and 'details' in component_scores['activities']:
-            activity_matches = []
-            for detail in component_scores['activities']['details']:
-                if isinstance(detail, dict):
-                    activity_matches.append({
-                        'input_activity': detail.get('activity_name', ''),
-                        'matched_activity': detail.get('matched_activity', ''),
-                        'similarity': detail.get('similarity', 0),
-                        'relevance_score': detail.get('base_relevance', 0)
-                    })
-            rag_context['activity_matches'] = activity_matches
-        
-        # 경력 요약 정보
-        if 'experience' in component_scores and 'details' in component_scores['experience']:
-            total_months = sum(
-                detail.get('months', 0) 
-                for detail in component_scores['experience']['details'] 
-                if isinstance(detail, dict)
-            )
-            rag_context['experience_summary'] = {'total_months': total_months}
-        
-        return rag_context
-    
-    def predict(self, spec_data):
-        """
-        RAG 기반 스펙 평가 수행
-        
-        Args:
-            spec_data (dict): SpecV1 API 형식의 스펙 데이터
-            
-        Returns:
-            dict: 닉네임과 총점을 포함한 결과
-        """
+        # 벡터 데이터베이스 추가 (선택적)
         try:
-            # 1. 데이터 형식 변환
-            resume_data = self._format_resume_data(spec_data)
-            job_field = resume_data['desired_job']
-            
-            # 2. RAG 기반 평가 수행 (벡터 검색 포함)
-            evaluation_result = self.rag_evaluator.evaluate_resume(resume_data)
-            
-            # 3. RAG 검색 결과를 프롬프트 컨텍스트로 변환
-            rag_context = self._create_rag_context_from_evaluation(evaluation_result)
-            
-            # 4. 기존 DB에서 가중치와 기준 정보 로드
-            try:
-                univ_name = spec_data.get('universities', [{}])[0].get('school_name', '')
-                weights, few_shot_examples, criteria, university_ranking = \
-                    self.db_connector.load_job_specific_data(job_field, univ_name)
-            except:
-                # 기본값 사용
-                weights = (30.0, 25.0, 25.0, 5.0, 15.0)  # 학력, 자격증, 경력, 어학, 활동
-                criteria = f"{job_field} 분야의 핵심 역량과 경험을 중시합니다."
-            
-            # 5. RAG 강화 프롬프트 생성 및 LLM 평가
-            enhanced_prompt = self.prompt_generator.create_rag_enhanced_prompt(
-                job_field, weights, criteria, rag_context
-            )
-            
-            # 6. LLM으로 최종 평가 (RAG 컨텍스트 반영)
-            resume_text = self._format_resume_text_for_llm(resume_data)
-            final_score = self._get_llm_score_with_rag_prompt(enhanced_prompt, resume_text)
-            
-            # 7. 결과 반환
-            result = {
-                "nickname": spec_data['nickname'],
-                "totalScore": final_score,
-                "rag_details": {
-                    "component_scores": evaluation_result['component_scores'],
-                    "rag_enhanced": True
-                }
+            load_dotenv()
+            db_config = {
+                'host': os.getenv('HOST'),
+                'database': os.getenv('DATABASE'),
+                'user': os.getenv('USER'),
+                'password': os.getenv('PASSWORD'),
+                'port': 5432
             }
+            self.vector_db = VectorDatabase(db_config)
+            self.rag_enabled = True
+            print("✅ RAG 기능 활성화")
+        except Exception as e:
+            print(f"⚠️ RAG 기능 비활성화 (기본 평가 사용): {e}")
+            self.vector_db = None
+            self.rag_enabled = False
+    
+    def _get_rag_context(self, spec_data, job_field):
+        """벡터 검색으로 RAG 컨텍스트 생성 (간단 버전)"""
+        if not self.rag_enabled:
+            return {}
+        
+        try:
+            rag_context = {}
             
-            print(f"RAG 기반 평가 완료: {spec_data['nickname']} -> {final_score:.2f}점")
-            return result
+            # 전공 유사도 검색
+            if spec_data.get('universities'):
+                for univ in spec_data['universities']:
+                    if univ.get('major'):
+                        matches = self.vector_db.search_similar_majors(
+                            univ['major'], job_field, top_k=1
+                        )
+                        if matches:
+                            rag_context['education_matches'] = matches
+                            break
+            
+            # 자격증 유사도 검색  
+            if spec_data.get('certificates'):
+                cert_matches = []
+                for cert in spec_data['certificates'][:3]:  # 최대 3개만
+                    matches = self.vector_db.search_similar_certificates(
+                        cert, job_field, top_k=1
+                    )
+                    if matches:
+                        cert_matches.extend(matches)
+                if cert_matches:
+                    rag_context['certificate_matches'] = cert_matches
+            
+            # 활동 유사도 검색
+            if spec_data.get('activities'):
+                activity_matches = []
+                for activity in spec_data['activities'][:3]:  # 최대 3개만
+                    activity_text = f"{activity.get('name', '')} {activity.get('role', '')}"
+                    matches = self.vector_db.search_similar_activities(
+                        activity_text, job_field, top_k=1
+                    )
+                    if matches:
+                        activity_matches.extend(matches)
+                if activity_matches:
+                    rag_context['activity_matches'] = activity_matches
+            
+            return rag_context
             
         except Exception as e:
-            print(f"RAG 평가 중 오류 발생: {e}")
-            # 오류 시 기본 RAG 점수 사용
-            try:
-                resume_data = self._format_resume_data(spec_data)
-                evaluation_result = self.rag_evaluator.evaluate_resume(resume_data)
-                fallback_score = evaluation_result['total_score']
-            except:
-                fallback_score = 50.0
-            
-            return {
-                "nickname": spec_data['nickname'],
-                "totalScore": fallback_score
-            }
+            print(f"RAG 컨텍스트 생성 오류: {e}")
+            return {}
     
-    def _format_resume_text_for_llm(self, resume_data):
-        """RAG 평가 데이터를 LLM용 텍스트로 변환"""
-        resume_text = f"최종학력: {resume_data['final_edu']} ({resume_data['final_status']})\n"
-        resume_text += f"지원직종: {resume_data['desired_job']}\n"
+    def _format_resume_text(self, spec_data):
+        """기존 이력서 텍스트 포맷팅 (변경 없음)"""
+        resume_text = "" 
+        resume_text += f"최종학력: {spec_data['final_edu']} ({spec_data['final_status']}), "
+        resume_text += f"지원직종: {spec_data['desired_job']}, "
         
         # 대학 정보
-        if resume_data.get('universities'):
+        if spec_data.get('universities'):
             univ_list = []
-            for univ in resume_data['universities']:
-                univ_text = f"{univ.get('school_name', '')}"
+            for univ in spec_data['universities']:
+                univ_text = f"{univ['school_name']}"
                 if univ.get('major'):
-                    univ_text += f" {univ['major']}"
+                    univ_text += f" {univ.get('major')}"
+                if univ.get('degree'):
+                    univ_text += f" ({univ.get('degree')})"
                 if univ.get('gpa') and univ.get('gpa_max'):
-                    univ_text += f" (학점: {univ['gpa']}/{univ['gpa_max']})"
+                    univ_text += f" 학점:{univ['gpa']}/{univ['gpa_max']}"
                 univ_list.append(univ_text)
-            resume_text += f"학력: {', '.join(univ_list)}\n"
+            resume_text += f"학력: {', '.join(univ_list)}, "
+        else:
+            resume_text += "학력: 대학 정보 없음, "
         
-        # 자격증
-        if resume_data.get('certificates'):
-            resume_text += f"자격증: {', '.join(resume_data['certificates'])}\n"
-        
-        # 경력
-        if resume_data.get('careers'):
+        # 경력 정보
+        if spec_data.get('careers'):
             career_list = []
-            for career in resume_data['careers']:
-                career_text = f"{career.get('company', '')} {career.get('role', '')} {career.get('work_month', 0)}개월"
+            for career in spec_data['careers']:
+                career_text = f"{career['company']}"
+                if career.get('role'):
+                    career_text += f" {career.get('role')}"
+                if career.get('work_month'):
+                    career_text += f" {career['work_month']}개월"
                 career_list.append(career_text)
-            resume_text += f"경력: {', '.join(career_list)}\n"
+            resume_text += f"경력: {', '.join(career_list)}, "
+        else:
+            resume_text += "경력: 경력 없음, "
         
-        # 활동
-        if resume_data.get('activities'):
+        # 자격증 정보
+        if spec_data.get('certificates'):
+            resume_text += f"자격증: {', '.join(spec_data['certificates'])}, "
+        else:
+            resume_text += "자격증: 자격증 없음, "
+        
+        # 언어 능력
+        if spec_data.get('languages'):
+            lang_list = []
+            for lang in spec_data['languages']:
+                lang_list.append(f"{lang['test']} {lang['score_or_grade']}")
+            resume_text += f"어학: {', '.join(lang_list)}, "
+        else:
+            resume_text += "어학: 공인 어학 점수 없음, "
+        
+        # 활동 정보
+        if spec_data.get('activities'):
             activity_list = []
-            for activity in resume_data['activities']:
-                activity_text = f"{activity.get('name', '')} {activity.get('role', '')}"
+            for activity in spec_data['activities']:
+                activity_text = f"{activity['name']}"
+                if activity.get('role'):
+                    activity_text += f" {activity.get('role')}"
+                if activity.get('award') and activity['award']:
+                    activity_text += f" (수상: {activity['award']})"
                 activity_list.append(activity_text)
-            resume_text += f"활동: {', '.join(activity_list)}\n"
+            resume_text += f"활동: {', '.join(activity_list)}"
+        else:
+            resume_text += "활동: 활동 내역 없음"
         
         return resume_text
     
-    def _get_llm_score_with_rag_prompt(self, enhanced_prompt, resume_text):
-        """RAG 강화 프롬프트로 LLM 점수 생성"""
+    def predict(self, spec_data):
+        """
+        핵심 수정: 기존 evaluator를 그대로 사용하되 
+        프롬프트만 RAG 강화 버전으로 교체
+        """
         try:
-            # 채팅 형식 구성
-            chat = [
-                {"role": "system", "content": enhanced_prompt},
-                {"role": "user", "content": resume_text}
-            ]
+            # 1. 기본 정보 추출
+            resume_text = self._format_resume_text(spec_data)
+            job_field = spec_data['desired_job']
+            univ_name = ""
+            if spec_data.get('universities') and len(spec_data['universities']) > 0:
+                univ_name = spec_data['universities'][0].get('school_name', '')
             
-            # LLM 추론
-            llm_output = self.rag_evaluator.generate_llm_evaluation(
-                {'desired_job': '인터넷·IT'}, 
-                {'total_score': 75.0}  # 임시값
-            )
+            # 2. 기존 DB에서 가중치와 기준 로드
+            weights, few_shot_examples, criteria, university_ranking = \
+                self.db_connector.load_job_specific_data(job_field, univ_name)
             
-            # 점수 추출
+            # 3. RAG 컨텍스트 생성 (있으면 사용, 없으면 무시)
+            rag_context = self._get_rag_context(spec_data, job_field) if self.rag_enabled else {}
+            
+            # 4. 프롬프트 생성 (RAG 컨텍스트가 있으면 강화 버전, 없으면 기본 버전)
+            if rag_context and self.rag_enabled:
+                # RAG 강화 프롬프트 사용
+                system_prompt = self.prompt_generator.create_rag_enhanced_prompt(
+                    job_field, weights, criteria, rag_context
+                )
+                print("📊 RAG 강화 프롬프트 사용")
+            else:
+                # 기본 프롬프트 사용
+                system_prompt = self.prompt_generator.create_job_specific_prompt(
+                    job_field, weights, few_shot_examples, criteria
+                )
+                print("📝 기본 프롬프트 사용")
+            
+            # 5. 기존 평가 로직 그대로 사용
+            chat = self.prompt_generator.create_chat_format(system_prompt, resume_text)
+            
+            # 모델 로드 확인
+            if not self.model_manager.model:
+                if not self.model_manager.load_model():
+                    return {"nickname": spec_data['nickname'], "totalScore": 50.0}
+            
+            # 모델 추론
+            full_output = self.model_manager.generate_response(chat)
+            if not full_output:
+                return {"nickname": spec_data['nickname'], "totalScore": 50.0}
+            
+            # 결과 파싱
+            final_score = self.score_parser.extract_score(full_output)
+            
+            # 점수 검증 및 변환
             try:
-                score = float(llm_output.strip())
-                return min(max(score, 0.0), 100.0)  # 0-100 범위 제한
+                total_score = float(final_score)
+                total_score = max(0.0, min(100.0, total_score))  # 0-100 범위 제한
             except:
-                return 10.04  # 기본값
-                
+                total_score = 50.0  # 기본값
+            
+            result = {
+                "nickname": spec_data['nickname'],
+                "totalScore": total_score
+            }
+            
+            # RAG 사용 여부 로깅
+            rag_status = "RAG 활성" if (rag_context and self.rag_enabled) else "기본 평가"
+            print(f"✅ 평가 완료: {spec_data['nickname']} -> {total_score:.2f}점 ({rag_status})")
+            
+            return result
+            
         except Exception as e:
-            print(f"LLM 점수 생성 오류: {e}")
-            return 44.44
+            print(f"평가 중 오류 발생: {e}")
+            return {
+                "nickname": spec_data['nickname'],
+                "totalScore": 50.0
+            }
+    
+    def get_system_status(self):
+        """시스템 상태 확인"""
+        return {
+            "rag_enabled": self.rag_enabled,
+            "model_loaded": self.model_manager.model is not None,
+            "vector_db_stats": self.vector_db.get_statistics() if self.rag_enabled else None
+        }
