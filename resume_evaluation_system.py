@@ -76,7 +76,10 @@ class ResumeEvaluationSystem:
         context = {
             'education_matches': [],
             'university_matches': [],
-            'activity_matches': []
+            'company_matches': [],
+            'certificate_matches': [],
+            'activity_matches': [],
+            'language_info': []
         }
         
         # 전공과 대학교 정보 수집
@@ -93,7 +96,28 @@ class ResumeEvaluationSystem:
                     matches = self.vector_db.search_similar_majors(univ['major'], job_field, top_k=1)
                     if matches:
                         context['education_matches'].extend(matches)
-        
+        # 경력 정보 수집
+        if spec_data.get('careers'):
+            for career in spec_data['careers']:
+                if career.get('company') and career.get('role'):
+                    company_matches = self.vector_db.search_similar_companies(
+                        career['company'],
+                        job_field,
+                        career['role'],
+                        top_k=1
+                    )
+                    if company_matches:
+                        # 근무 기간 정보 추가
+                        for match in company_matches:
+                            match['work_month'] = career.get('work_month', 0)
+                        context['company_matches'].extend(company_matches)
+        # 자격증 정보 수집
+        if spec_data.get('certificates'):
+            context['certificate_matches'] = []
+            for certificate in spec_data['certificates']:
+                cert_matches = self.vector_db.search_similar_certificates(certificate, job_field, top_k=1)
+                if cert_matches:
+                    context['certificate_matches'].extend(cert_matches)
         # 활동 정보 수집
         if spec_data.get('activities'):
             for activity in spec_data['activities']:
@@ -101,6 +125,9 @@ class ResumeEvaluationSystem:
                     activity_matches = self.vector_db.search_similar_activities(activity['name'], job_field, top_k=1)
                     if activity_matches:
                         context['activity_matches'].extend(activity_matches)
+        # 어학 정보 수집
+        if spec_data.get('languages'):
+            context['language_info'] = spec_data['languages']
         
         return context
     

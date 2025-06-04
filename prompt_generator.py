@@ -26,8 +26,6 @@ class PromptGenerator:
             print(f"📌 {category}: {score:.2f}점")
             total += score
         print("=" * 30)
-        print(f"📊 총점: {total:.2f}점")
-        print("=" * 30)
 
     def create_job_specific_prompt(self, job_field, weights, criteria):
         """기존 직무별 특화 프롬프트 생성 (변경 없음)"""
@@ -91,7 +89,7 @@ class PromptGenerator:
 5. 계산 과정을 단계별로 나누어 진행하세요.
 
 반드시 아래 JSON 형식으로만 답변하세요:
-{{"totalScore": 85.75}}
+{{"totalScore": XX.XX}}
 
 설명이나 다른 텍스트는 절대 포함하지 마세요. 
 총점 = 40 + 학력점수 + 자격증점수 + 경력점수 + 어학점수 + 활동점수 """
@@ -152,22 +150,32 @@ class PromptGenerator:
             system_prompt += f"\n🎓 대학교 점수: 0점 (대학교 정보 없음)"
             self.score_breakdown["학교"] = 0.0
         
-        # 자격증 유사도 분석  
+        # 자격증 유사도 분석
         if rag_context.get('certificate_matches'):
-            system_prompt += f"\n자격증 분석:"
+            system_prompt += f"\n🏆 자격증 분석:"
             total_cert_score = 0
             for match in rag_context['certificate_matches'][:3]:
                 similarity = match.get('similarity', 0)
                 weight_score = match.get('weight_score', 0)
+                cert_name = match.get('certificate_name', '')
                 
                 if similarity >= 0.8:
-                    cert_score = float(weight_score) * float(similarity)
+                    cert_score = float(weights[3]) * float(weights[4]) * 0.8  # 관련성 점수
                     total_cert_score += cert_score
-                    system_prompt += f"\n  ✅ 관련 자격증: +{cert_score:.2f}점"
+                    system_prompt += f"\n  ✅ {cert_name} 관련 자격증: +{cert_score:.2f}점"
                 elif similarity >= 0.6:
-                    cert_score = float(weight_score) * float(similarity) * 0.7
+                    cert_score = float(weights[3]) * float(weights[4]) * 0.5  # 부분 관련
                     total_cert_score += cert_score
-                    system_prompt += f"\n  ⚠️ 부분 관련: +{cert_score:.2f}점"
+                    system_prompt += f"\n  ⚠️ {cert_name} 부분 관련: +{cert_score:.2f}점"
+                elif similarity >= 0.4:
+                    cert_score = float(weights[3]) * float(weights[4]) * 0.3  # 낮은 관련성
+                    total_cert_score += cert_score
+                    system_prompt += f"\n  📋 {cert_name} 낮은 관련성: +{cert_score:.2f}점"
+            
+            # 자격증 개수 보너스
+            cert_count = len(rag_context['certificate_matches'])
+            count_bonus = min(cert_count * 1.0, float(weights[3]) * float(weights[5]))
+            total_cert_score += count_bonus
             
             max_cert_score = min(total_cert_score, float(weights[3]))
             system_prompt += f"\n  📊 자격증 총점: {max_cert_score:.2f}점 (상한: {weights[3]}점)"
@@ -176,6 +184,38 @@ class PromptGenerator:
             system_prompt += f"\n🏆 자격증 점수: 0점 (자격증 없음)"
             self.score_breakdown["자격증"] = 0.0
         
+        # 경력 유사도 분석
+        if rag_context.get('company_matches'):
+            system_prompt += f"\n💼 경력 분석:"
+            total_career_score = 0
+            for match in rag_context['company_matches'][:3]:
+                similarity = match.get('similarity', 0)
+                duration_months = match.get('work_month', 0)
+                
+                # 직무 관련성 점수 계산
+                if similarity >= 0.8:
+                    relevance_score = float(weights[6]) * float(weights[7])
+                    system_prompt += f"\n  ✅ 높은 직무 관련성: +{relevance_score:.2f}점"
+                elif similarity >= 0.6:
+                    relevance_score = float(weights[6]) * float(weights[7]) * 0.7
+                    system_prompt += f"\n  ⚠️ 중간 직무 관련성: +{relevance_score:.2f}점"
+                else:
+                    relevance_score = float(weights[6]) * float(weights[7]) * 0.3
+                    system_prompt += f"\n  ⚠️ 낮은 직무 관련성: +{relevance_score:.2f}점"
+                
+                # 경력 기간 점수 계산
+                duration_score = min(duration_months * (float(weights[6]) * float(weights[8])), float(weights[6]) * float(weights[8]))
+                system_prompt += f"\n  ⏳ 경력 기간({duration_months}개월): +{duration_score:.2f}점"
+                
+                total_career_score += (relevance_score + duration_score)
+            
+            max_career_score = min(total_career_score, float(weights[6]))
+            system_prompt += f"\n  📊 경력 총점: {max_career_score:.2f}점 (상한: {weights[6]}점)"
+            self.score_breakdown["경력"] = max_career_score
+        else:
+            system_prompt += f"\n💼 경력 점수: 0점 (경력 없음)"
+            self.score_breakdown["경력"] = 0.0
+
         # 활동 유사도 분석
         if rag_context.get('activity_matches'):
             system_prompt += f"\n🎯 활동 분석:"
@@ -213,8 +253,6 @@ class PromptGenerator:
 - 경력 없음: 0점
 - 어학 없음: 0점
 - 관련 활동 1개: {float(weights[10])*float(weights[11])*0.8:.2f}점
-
-총점 = 40 + {float(weights[0])*float(weights[1]):.2f} + {float(weights[0])*float(weights[2])*0.7:.2f} + 0 + 0 + 0 + {float(weights[10])*float(weights[11])*0.8:.2f} = {40 + float(weights[0])*float(weights[1]) + float(weights[0])*float(weights[2])*0.7 + float(weights[10])*float(weights[11])*0.8}점
 
 === 출력 규칙 ===
 1. 위 계산 방식에 따라 정확한 점수 산출

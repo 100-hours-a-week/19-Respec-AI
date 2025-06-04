@@ -149,7 +149,38 @@ class VectorDatabase:
         except Exception as e:
             print(f"대학 검색 오류: {e}")
             return []
-    
+    def search_similar_companies(self, company: str, job_category: str, role: str, top_k: int = 5) -> List[Dict]:
+        """유사한 회사 및 직무 검색"""
+        try:
+            # 회사명과 직무를 결합하여 임베딩
+            query_embedding = self.embedding_model.encode(company)
+            cursor = self.conn.cursor()
+            
+            cursor.execute("""
+                SELECT company_name, industry_group, recognition_score,
+                       1 - (name_embedding <=> %s::vector) as similarity
+                FROM company_recognition
+                WHERE industry_group = %s
+                ORDER BY similarity DESC
+                LIMIT %s
+            """, (query_embedding.tolist(), job_category, top_k))
+            
+            results = cursor.fetchall()
+            cursor.close()
+            
+            return [
+                {
+                    "company_name": row[0],
+                    "industry_group": row[1],
+                    "recognition_score": float(row[2]),
+                    "similarity": float(row[3])
+                }
+                for row in results
+            ]
+            
+        except Exception as e:
+            print(f"회사 및 직무 검색 오류: {e}")
+            return []
     def close(self):
         """데이터베이스 연결 종료"""
         if self.conn:
