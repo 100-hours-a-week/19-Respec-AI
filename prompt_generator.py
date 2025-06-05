@@ -1,272 +1,409 @@
 from typing import Dict, List, Tuple, Optional
 import json
+from dataclasses import dataclass
+from enum import Enum
 
-class PromptGenerator:
-    """프롬프트 생성을 담당하는 클래스 - 기존 메서드 수정 최소화"""
+
+class ScoreCategory(Enum):
+    """점수 카테고리 정의"""
+    BASIC = "기본 점수"
+    MAJOR = "전공"
+    UNIVERSITY = "학교"
+    CERTIFICATION = "자격증"
+    EXPERIENCE = "경력"
+    LANGUAGE = "어학"
+    ACTIVITY = "활동"
+
+
+@dataclass
+class WeightConfig:
+    """가중치 설정을 위한 데이터 클래스"""
+    education_max: float  # 학력 전체 만점
+    major_ratio: float    # 전공 비율
+    university_ratio: float  # 학교 비율
+    cert_max: float       # 자격증 전체 만점
+    cert_relevance_ratio: float  # 자격증 관련성 비율
+    cert_count_ratio: float      # 자격증 개수 비율
+    experience_max: float        # 경력 전체 만점
+    exp_relevance_ratio: float   # 경력 관련성 비율
+    exp_duration_ratio: float    # 경력 기간 비율
+    language_max: float          # 어학 전체 만점
+    activity_max: float          # 활동 전체 만점
+    activity_relevance_ratio: float  # 활동 관련성 비율
+    activity_role_ratio: float       # 활동 역할 비율
+
+    @classmethod
+    def from_tuple(cls, weights: Tuple) -> 'WeightConfig':
+        """기존 튜플 형태의 가중치를 WeightConfig로 변환"""
+        return cls(
+            education_max=float(weights[0]),
+            major_ratio=float(weights[1]),
+            university_ratio=float(weights[2]),
+            cert_max=float(weights[3]),
+            cert_relevance_ratio=float(weights[4]),
+            cert_count_ratio=float(weights[5]),
+            experience_max=float(weights[6]),
+            exp_relevance_ratio=float(weights[7]),
+            exp_duration_ratio=float(weights[8]),
+            language_max=float(weights[9]),
+            activity_max=float(weights[10]),
+            activity_relevance_ratio=float(weights[11]),
+            activity_role_ratio=float(weights[12])
+        )
+
+
+class ScoreCalculator:
+    """점수 계산 전담 클래스"""
     
-    def __init__(self):
-        # RAG 검색 결과 통합을 위한 설정
-        self.similarity_threshold = 0.7
-        self.max_rag_examples = 3
-        self.score_breakdown = {
-            "기본 점수": 40.0,
-            "전공": 0.0,
-            "학교": 0.0,
-            "자격증": 0.0,
-            "경력": 0.0,
-            "어학": 0.0,
-            "활동": 0.0
+    BASE_SCORE = 40.0
+    
+    def __init__(self, weight_config: WeightConfig):
+        self.weights = weight_config
+        self.scores = {category.value: 0.0 for category in ScoreCategory}
+        self.scores[ScoreCategory.BASIC.value] = self.BASE_SCORE
+    
+    def calculate_major_score(self, similarity: float) -> float:
+        """전공 점수 계산"""
+        max_score = self.weights.education_max * self.weights.major_ratio
+        
+        if similarity >= 0.9:
+            return max_score
+        elif similarity >= 0.7:
+            return max_score * 0.8
+        elif similarity >= 0.5:
+            return max_score * 0.5
+        else:
+            return max_score * 0.2
+    
+    def calculate_university_score(self, rank: int) -> float:
+        """대학교 점수 계산"""
+        max_score = self.weights.education_max * self.weights.university_ratio
+        
+        if rank <= 50:
+            return max_score
+        elif rank <= 100:
+            return max_score * 0.9
+        elif rank <= 200:
+            return max_score * 0.8
+        else:
+            return max_score * 0.7
+    
+    def calculate_certification_score(self, matches: List[Dict]) -> float:
+        """자격증 점수 계산"""
+        total_score = 0.0
+        relevance_score = 0.0
+        
+        # 관련성 점수 계산
+        for match in matches[:3]:
+            similarity = match.get('similarity', 0)
+            if similarity >= 0.8:
+                relevance_score += self.weights.cert_max * self.weights.cert_relevance_ratio * 0.8
+            elif similarity >= 0.6:
+                relevance_score += self.weights.cert_max * self.weights.cert_relevance_ratio * 0.5
+            elif similarity >= 0.4:
+                relevance_score += self.weights.cert_max * self.weights.cert_relevance_ratio * 0.3
+        
+        # 개수 보너스
+        count_bonus = min(len(matches) * 1.0, 
+                         self.weights.cert_max * self.weights.cert_count_ratio)
+        
+        total_score = relevance_score + count_bonus
+        return min(total_score, self.weights.cert_max)
+    
+    def calculate_experience_score(self, matches: List[Dict]) -> float:
+        """경력 점수 계산"""
+        total_score = 0.0
+        
+        for match in matches[:3]:
+            similarity = match.get('similarity', 0)
+            duration_months = match.get('work_month', 0)
+            
+            # 직무 관련성 점수
+            if similarity >= 0.8:
+                relevance_score = self.weights.experience_max * self.weights.exp_relevance_ratio
+            elif similarity >= 0.6:
+                relevance_score = self.weights.experience_max * self.weights.exp_relevance_ratio * 0.7
+            else:
+                relevance_score = self.weights.experience_max * self.weights.exp_relevance_ratio * 0.3
+            
+            # 경력 기간 점수
+            duration_score = min(duration_months * (self.weights.experience_max * self.weights.exp_duration_ratio),
+                               self.weights.experience_max * self.weights.exp_duration_ratio)
+            
+            total_score += (relevance_score + duration_score)
+        
+        return min(total_score, self.weights.experience_max)
+    
+    def calculate_activity_score(self, matches: List[Dict]) -> float:
+        """활동 점수 계산"""
+        total_score = 0.0
+        
+        for match in matches[:3]:
+            similarity = match.get('similarity', 0)
+            
+            if similarity >= 0.8:
+                activity_score = self.weights.activity_max * self.weights.activity_relevance_ratio * similarity
+            elif similarity >= 0.6:
+                activity_score = self.weights.activity_max * self.weights.activity_relevance_ratio * similarity * 0.8
+            else:
+                continue
+                
+            total_score += activity_score
+        
+        return min(total_score, self.weights.activity_max * 0.7)
+    
+    def get_total_score(self) -> float:
+        """총점 계산"""
+        return sum(self.scores.values())
+    
+    def normalize_to_100(self) -> Dict[str, float]:
+        """각 영역별 점수를 100점 만점으로 정규화"""
+        max_scores = {
+            "academic": self.weights.education_max,
+            "certification": self.weights.cert_max,
+            "workExperience": self.weights.experience_max,
+            "languageProficiency": self.weights.language_max,
+            "extracurricular": self.weights.activity_max
         }
+        
+        # 학력은 전공+학교 점수 합계
+        education_score = self.scores[ScoreCategory.MAJOR.value] + self.scores[ScoreCategory.UNIVERSITY.value]
+        
+        categories = {
+            "academic": education_score,
+            "certification": self.scores[ScoreCategory.CERTIFICATION.value],
+            "workExperience": self.scores[ScoreCategory.EXPERIENCE.value],
+            "languageProficiency": self.scores[ScoreCategory.LANGUAGE.value],
+            "extracurricular": self.scores[ScoreCategory.ACTIVITY.value]
+        }
+        
+        normalized = {}
+        for category, current_score in categories.items():
+            if max_scores[category] > 0:
+                normalized[category] = (current_score / max_scores[category]) * 100
+            else:
+                normalized[category] = 0.0
+                
+        return normalized
 
-    def print_score_breakdown(self):
-        """점수 분석 결과를 콘솔에 출력"""
+
+class ScoreReporter:
+    """점수 출력 전담 클래스"""
+    
+    @staticmethod
+    def print_score_breakdown(scores: Dict[str, float]) -> str:
+        """점수 분석 결과 출력 및 프롬프트용 텍스트 반환"""
+        # 콘솔 출력
         print("\n=== 🎯 이력서 점수 분석 결과 ===")
         total = 0.0
-        for category, score in self.score_breakdown.items():
-            print(f"📌 {category}: {score:.2f}점")
+        prompt_lines = []
+        
+        for category, score in scores.items():
+            line = f"📌 {category}: {score:.2f}점"
+            print(line)
+            prompt_lines.append(line)
             total += score
+        
+        total_line = f"📊 총점: {total:.2f}점"
+        print(total_line)
+        prompt_lines.append(total_line)
         print("=" * 30)
+        
+        # 프롬프트용 텍스트 생성
+        prompt_text = "\n=== 📊 현재 계산된 점수 ===\n"
+        prompt_text += "\n".join(prompt_lines)
+        prompt_text += "\n" + "=" * 30
+        
+        return prompt_text
+    
+    @staticmethod
+    def print_normalized_scores(normalized_scores: Dict[str, float]) -> str:
+        """100점 만점 기준 점수 출력 및 프롬프트용 텍스트 반환"""
+        # 콘솔 출력
+        print("\n=== 🎯 100점 만점 기준 점수 ===")
+        category_names = {
+            "academic": "학력",
+            "certification": "자격증", 
+            "workExperience": "경력",
+            "languageProficiency": "어학",
+            "extracurricular": "활동"
+        }
+        
+        prompt_lines = []
+        for category, score in normalized_scores.items():
+            line = f"📌 {category_names[category]}: {score:.2f}/100점"
+            print(line)
+            prompt_lines.append(line)
+        print("=" * 30)
+        
+        # 프롬프트용 텍스트 생성
+        prompt_text = "\n=== 🎯 100점 만점 기준 점수 ===\n"
+        prompt_text += "\n".join(prompt_lines)
+        prompt_text += "\n" + "=" * 30
+        
+        return prompt_text
+    
+    @staticmethod
+    def create_score_summary_for_prompt(scores: Dict[str, float], 
+                                      normalized_scores: Dict[str, float]) -> str:
+        """프롬프트에 포함할 점수 요약 생성"""
+        total = sum(scores.values())
+        
+        summary = f"""
+=== 📊 점수 계산 결과 요약 ===
+• 현재 총점: {total:.2f}점
+• 기본 점수: {scores.get('기본 점수', 40.0):.2f}점
+• 전공 점수: {scores.get('전공', 0.0):.2f}점  
+• 학교 점수: {scores.get('학교', 0.0):.2f}점
+• 자격증 점수: {scores.get('자격증', 0.0):.2f}점
+• 경력 점수: {scores.get('경력', 0.0):.2f}점
+• 어학 점수: {scores.get('어학', 0.0):.2f}점
+• 활동 점수: {scores.get('활동', 0.0):.2f}점
 
-    def create_job_specific_prompt(self, job_field, weights, criteria):
-        """기존 직무별 특화 프롬프트 생성 (변경 없음)"""
-        system_prompt = f"""{job_field} 지원분야 이력서를 벡터 검색 결과를 활용하여 100점 만점으로 평가하세요.
+=== 📈 100점 기준 환산 ==="""
+        
+        category_names = {
+            "academic": "학력",
+            "certification": "자격증",
+            "workExperience": "경력", 
+            "languageProficiency": "어학",
+            "extracurricular": "활동"
+        }
+        
+        for category, score in normalized_scores.items():
+            summary += f"\n• {category_names[category]}: {score:.2f}/100점"
+        
+        summary += "\n" + "=" * 40
+        
+        return summary
+
+
+class PromptBuilder:
+    """프롬프트 생성 전담 클래스"""
+    
+    def __init__(self, weight_config: WeightConfig):
+        self.weights = weight_config
+    
+    def build_basic_prompt(self, job_field: str, criteria: str) -> str:
+        """기본 프롬프트 생성"""
+        return f"""당신은 사회초년생의 이력서를 지원분야와 얼마나 관련있게 작성하였는지 평가해주는 AI입니다
+{job_field} 지원분야 이력서를 100점 만점으로 평가하세요.
+사회초년생인만큼 경력의 유무는 크게 중요하지 않습니다
+
 === 평가 기준 ===
 {job_field} 분야 요구사항: {criteria}
-총점 = 40 + 학력점수
 
 === 출력 규칙 ===
-1. 반드시 JSON 형식으로만 출력: {{"totalScore": XX.XX}}
-2. 소수점 둘째 자리까지 정확히 계산
-3. 어떤 설명이나 추가 텍스트도 금지
-"""
-
-        return system_prompt
+반드시 JSON 형식으로만 답변: {{"totalScore": XX.XX}}
+설명이나 다른 텍스트는 절대 포함하지 마세요."""
     
-    def create_rag_enhanced_prompt(self, job_field: str, weights: Tuple, criteria: str, 
-                                 rag_context: Dict) -> str:
-        """RAG 검색 결과를 반영한 향상된 프롬프트 - 핵심 수정"""
+    def add_rag_context(self, base_prompt: str, rag_context: Dict, 
+                       score_calculator: ScoreCalculator) -> str:
+        """RAG 컨텍스트를 프롬프트에 추가"""
+        if not rag_context:
+            return base_prompt
         
-        # 기본 프롬프트 시작
-        system_prompt = f"""{job_field} 지원분야 이력서를 벡터 검색 결과를 활용하여 100점 만점으로 평가하세요.
-
-=== 평가 기준 ===
-{job_field} 분야 요구사항: {criteria}
-
-=== 정량적 점수 계산 방식 ===
-각 영역별 점수 = (영역별 세부점수 X 가중치)의 합계
-
-• 학력 영역 ({weights[0]}점 만점)
-  - 전공 적합성: 0~{float(weights[0])*float(weights[1]):.2f}점
-  - 학점/학교: 0~{float(weights[0])*float(weights[2]):.2f}점
-  * 학점 점수 = 학점/학교 만점 × (실제 학점/만점 학점)
-  * 학교 점수 계산 기준:
-    - 상위 1-50위: 만점의 100%
-    - 상위 51-100위: 만점의 90%
-    - 상위 101-200위: 만점의 80%
-    - 그 외: 만점의 70%
-
-• 자격증 영역 ({weights[3]}점 만점)
-  - 직무 관련성: 0~{float(weights[3])*float(weights[4]):.2f}점
-  - 개수/난이도: 0~{float(weights[3])*float(weights[5]):.2f}점
-
-• 경력 영역 ({weights[6]}점 만점)
-  - 직무 관련성: 0~{float(weights[6])*float(weights[7]):.2f}점
-  - 경력 기간: 0~{float(weights[6])*float(weights[8]):.2f}점
-
-• 어학 영역 ({weights[9]}점 만점)
-  - 점수/등급: 0~{float(weights[9])}점
-
-• 활동 영역 ({weights[10]}점 만점)
-  - 직무 관련성: 0~{float(weights[10])*float(weights[11]):.2f}점
-  - 역할/성과: 0~{float(weights[10])*float(weights[12]):.2f}점
-
-=== 점수 계산 주의사항 ===
-1. 기본 점수는 정확히 40점입니다.
-2. 각 영역의 점수는 해당 영역의 만점을 초과할 수 없습니다.
-3. 최종 점수는 반드시 아래 공식으로 계산하세요:
-   최종 점수 = 40 + min(학력점수, {weights[0]}) + min(자격증점수, {weights[3]}) + min(경력점수, {weights[6]}) + min(어학점수, {weights[9]}) + min(활동점수, {weights[10]})
-4. 계산기를 사용하여 정확한 덧셈을 수행하세요.
-5. 계산 과정을 단계별로 나누어 진행하세요.
-
-반드시 아래 JSON 형식으로만 답변하세요:
-{{"totalScore": XX.XX}}
-
-설명이나 다른 텍스트는 절대 포함하지 마세요. 
-총점 = 40 + 학력점수 + 자격증점수 + 경력점수 + 어학점수 + 활동점수 """
-
-        if rag_context:
-            system_prompt += f"\n\n=== 벡터 검색 기반 점수 가이드 ==="
+        rag_section = "\n\n=== 벡터 검색 기반 점수 가이드 ==="
         
-        # 전공 유사도 분석
+        # 전공 분석
         if rag_context.get('education_matches'):
-            for match in rag_context['education_matches'][:2]:
-                similarity = match.get('similarity', 0)
-                
-                if similarity >= 0.9:
-                    major_score = float(weights[0]) * float(weights[1])  # 만점
-                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (완벽 매칭)"
-                    self.score_breakdown["전공"] = major_score
-                elif similarity >= 0.7:
-                    major_score = float(weights[0]) * float(weights[1]) * 0.8  # 80%
-                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (높은 적합성)"
-                    self.score_breakdown["전공"] = major_score
-                elif similarity >= 0.5:
-                    major_score = float(weights[0]) * float(weights[1]) * 0.5  # 50%
-                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (보통 적합성)"
-                    self.score_breakdown["전공"] = major_score
-                else:
-                    major_score = float(weights[0]) * float(weights[1]) * 0.2  # 20%
-                    system_prompt += f"\n전공 점수: {major_score:.2f}점 (낮은 적합성)"
-                    self.score_breakdown["전공"] = major_score
-                break
-        else:
-            system_prompt += f"\n📚 전공 점수: 0점 (전공 정보 없음)"
-            self.score_breakdown["전공"] = 0.0
+            match = rag_context['education_matches'][0]
+            similarity = match.get('similarity', 0)
+            major_score = score_calculator.calculate_major_score(similarity)
+            score_calculator.scores[ScoreCategory.MAJOR.value] = major_score
+            rag_section += f"\n전공 점수: {major_score:.2f}점 (유사도: {similarity:.2f})"
         
-        # 대학교 랭킹 기반 점수 분석
+        # 대학교 분석
         if rag_context.get('university_matches'):
-            system_prompt += f"\n🎓 대학교 분석:"
-            for match in rag_context['university_matches'][:1]:  # top_k=1로 설정했으므로
-                rank = match.get('rank_position', 0)
-                university_name = match.get('university_name', '')
-                
-                if rank <= 50:
-                    uni_score = float(weights[0]) * float(weights[2])  # 만점
-                    system_prompt += f"\n {university_name} (상위 50위권): {uni_score:.2f}점"
-                    self.score_breakdown["학교"] = uni_score
-                elif rank <= 100:
-                    uni_score = float(weights[0]) * float(weights[2]) * 0.9
-                    system_prompt += f"\n {university_name} (상위 51-100위권): {uni_score:.2f}점"
-                    self.score_breakdown["학교"] = uni_score
-                elif rank <= 200:
-                    uni_score = float(weights[0]) * float(weights[2]) * 0.8
-                    system_prompt += f"\n {university_name} (상위 101-200위권): {uni_score:.2f}점"
-                    self.score_breakdown["학교"] = uni_score
-                else:
-                    uni_score = float(weights[0]) * float(weights[2]) * 0.7
-                    system_prompt += f"\n {university_name}: {uni_score:.2f}점"
-                    self.score_breakdown["학교"] = uni_score
-        else:
-            system_prompt += f"\n🎓 대학교 점수: 0점 (대학교 정보 없음)"
-            self.score_breakdown["학교"] = 0.0
+            match = rag_context['university_matches'][0]
+            rank = match.get('rank_position', 999)
+            university_name = match.get('university_name', '')
+            uni_score = score_calculator.calculate_university_score(rank)
+            score_calculator.scores[ScoreCategory.UNIVERSITY.value] = uni_score
+            rag_section += f"\n🎓 {university_name} (순위: {rank}위): {uni_score:.2f}점"
         
-        # 자격증 유사도 분석
+        # 자격증 분석
         if rag_context.get('certificate_matches'):
-            system_prompt += f"\n🏆 자격증 분석:"
-            total_cert_score = 0
-            for match in rag_context['certificate_matches'][:3]:
-                similarity = match.get('similarity', 0)
-                weight_score = match.get('weight_score', 0)
-                cert_name = match.get('certificate_name', '')
-                
-                if similarity >= 0.8:
-                    cert_score = float(weights[3]) * float(weights[4]) * 0.8  # 관련성 점수
-                    total_cert_score += cert_score
-                    system_prompt += f"\n  ✅ {cert_name} 관련 자격증: +{cert_score:.2f}점"
-                elif similarity >= 0.6:
-                    cert_score = float(weights[3]) * float(weights[4]) * 0.5  # 부분 관련
-                    total_cert_score += cert_score
-                    system_prompt += f"\n  ⚠️ {cert_name} 부분 관련: +{cert_score:.2f}점"
-                elif similarity >= 0.4:
-                    cert_score = float(weights[3]) * float(weights[4]) * 0.3  # 낮은 관련성
-                    total_cert_score += cert_score
-                    system_prompt += f"\n  📋 {cert_name} 낮은 관련성: +{cert_score:.2f}점"
-            
-            # 자격증 개수 보너스
-            cert_count = len(rag_context['certificate_matches'])
-            count_bonus = min(cert_count * 1.0, float(weights[3]) * float(weights[5]))
-            total_cert_score += count_bonus
-            
-            max_cert_score = min(total_cert_score, float(weights[3]))
-            system_prompt += f"\n  📊 자격증 총점: {max_cert_score:.2f}점 (상한: {weights[3]}점)"
-            self.score_breakdown["자격증"] = max_cert_score
-        else:
-            system_prompt += f"\n🏆 자격증 점수: 0점 (자격증 없음)"
-            self.score_breakdown["자격증"] = 0.0
+            cert_score = score_calculator.calculate_certification_score(
+                rag_context['certificate_matches']
+            )
+            score_calculator.scores[ScoreCategory.CERTIFICATION.value] = cert_score
+            rag_section += f"\n📜 자격증 총점: {cert_score:.2f}점"
         
-        # 경력 유사도 분석
+        # 경력 분석
         if rag_context.get('company_matches'):
-            system_prompt += f"\n💼 경력 분석:"
-            total_career_score = 0
-            for match in rag_context['company_matches'][:3]:
-                similarity = match.get('similarity', 0)
-                duration_months = match.get('work_month', 0)
-                
-                # 직무 관련성 점수 계산
-                if similarity >= 0.8:
-                    relevance_score = float(weights[6]) * float(weights[7])
-                    system_prompt += f"\n  ✅ 높은 직무 관련성: +{relevance_score:.2f}점"
-                elif similarity >= 0.6:
-                    relevance_score = float(weights[6]) * float(weights[7]) * 0.7
-                    system_prompt += f"\n  ⚠️ 중간 직무 관련성: +{relevance_score:.2f}점"
-                else:
-                    relevance_score = float(weights[6]) * float(weights[7]) * 0.3
-                    system_prompt += f"\n  ⚠️ 낮은 직무 관련성: +{relevance_score:.2f}점"
-                
-                # 경력 기간 점수 계산
-                duration_score = min(duration_months * (float(weights[6]) * float(weights[8])), float(weights[6]) * float(weights[8]))
-                system_prompt += f"\n  ⏳ 경력 기간({duration_months}개월): +{duration_score:.2f}점"
-                
-                total_career_score += (relevance_score + duration_score)
-            
-            max_career_score = min(total_career_score, float(weights[6]))
-            system_prompt += f"\n  📊 경력 총점: {max_career_score:.2f}점 (상한: {weights[6]}점)"
-            self.score_breakdown["경력"] = max_career_score
-        else:
-            system_prompt += f"\n💼 경력 점수: 0점 (경력 없음)"
-            self.score_breakdown["경력"] = 0.0
-
-        # 활동 유사도 분석
+            exp_score = score_calculator.calculate_experience_score(
+                rag_context['company_matches']
+            )
+            score_calculator.scores[ScoreCategory.EXPERIENCE.value] = exp_score
+            rag_section += f"\n💼 경력 총점: {exp_score:.2f}점"
+        
+        # 활동 분석
         if rag_context.get('activity_matches'):
-            system_prompt += f"\n🎯 활동 분석:"
-            total_activity_score = 0
-            for match in rag_context['activity_matches'][:3]:
-                similarity = match.get('similarity', 0)
-                relevance = match.get('relevance_score', 0.5)
-                
-                if similarity >= 0.8:
-                    activity_score = float(weights[10]) * float(weights[11])* float(similarity)
-                    total_activity_score += activity_score
-                    system_prompt += f"\n  ✅ 관련 활동: +{activity_score:.2f}점"
-                elif similarity >= 0.6:
-                    activity_score = float(weights[10]) * float(weights[11]) * float(similarity) * 0.8
-                    total_activity_score += activity_score
-                    system_prompt += f"\n  ⚠️ 부분 관련: +{activity_score:.2f}점"
-            
-            max_activity_score = min(total_activity_score, float(weights[10]) * 0.7)
-            system_prompt += f"\n  📊 활동 관련성: {max_activity_score:.2f}점"
-            self.score_breakdown["활동"] = max_activity_score
-        else:
-            system_prompt += f"\n🎯 활동 점수: 0점 (활동 내역 없음)"
-            self.score_breakdown["활동"] = 0.0
+            activity_score = score_calculator.calculate_activity_score(
+                rag_context['activity_matches']
+            )
+            score_calculator.scores[ScoreCategory.ACTIVITY.value] = activity_score
+            rag_section += f"\n🏃 활동 총점: {activity_score:.2f}점"
+        
+        return base_prompt + rag_section
 
-        # 점수 분석 결과 출력
-        self.print_score_breakdown()
 
-        # 평가 지시사항
-        system_prompt += f"""
-=== 점수 계산 예시 ===
-만약 지원자가:
-- 전공 적합성 높음: {float(weights[0])*float(weights[1]):.2f}점
-- 학점 우수(3.2/4.5): {float(weights[0])*float(weights[2])*0.7:.2f}점  
-- 자격증 없음: 0점
-- 경력 없음: 0점
-- 어학 없음: 0점
-- 관련 활동 1개: {float(weights[10])*float(weights[11])*0.8:.2f}점
-
-=== 출력 규칙 ===
-1. 위 계산 방식에 따라 정확한 점수 산출
-2. 반드시 JSON 형식으로만 출력: {{"totalScore": XX.XX}}
-3. 소수점 둘째 자리까지 정확히 계산
-4. 어떤 설명이나 추가 텍스트도 금지 """
-
-        return system_prompt
+class PromptGenerator:
+    """메인 프롬프트 생성기 클래스 - 기존 인터페이스 유지"""
     
-    def create_chat_format(self, system_prompt, user_resume):
-        """채팅 형식 구성 (변경 없음)"""
+    def __init__(self):
+        self.similarity_threshold = 0.7
+        self.max_rag_examples = 3
+        self.score_calculator = None
+        self.reporter = ScoreReporter()
+    
+    def create_rag_enhanced_prompt(self, job_field: str, weights: Tuple, 
+                                 criteria: str, rag_context: Dict) -> str:
+        """RAG 향상 프롬프트 생성 - 기존 인터페이스 유지"""
+        weight_config = WeightConfig.from_tuple(weights)
+        self.score_calculator = ScoreCalculator(weight_config)
+        prompt_builder = PromptBuilder(weight_config)
+        
+        # 기본 프롬프트 생성
+        base_prompt = prompt_builder.build_basic_prompt(job_field, criteria)
+        
+        # RAG 컨텍스트 추가
+        enhanced_prompt = prompt_builder.add_rag_context(
+            base_prompt, rag_context, self.score_calculator
+        )
+        
+        # 점수 출력 및 프롬프트용 텍스트 생성
+        score_text = self.reporter.print_score_breakdown(self.score_calculator.scores)
+        normalized_scores = self.score_calculator.normalize_to_100()
+        normalized_text = self.reporter.print_normalized_scores(normalized_scores)
+        
+        # 점수 요약을 프롬프트에 추가
+        score_summary = self.reporter.create_score_summary_for_prompt(
+            self.score_calculator.scores, normalized_scores
+        )
+        
+        # 최종 프롬프트에 점수 정보 포함
+        final_prompt = enhanced_prompt + score_summary + """
+
+=== ⚠️ 중요 지시사항 ===
+위에 계산된 점수들을 참고하여 최종 점수를 산출하세요.
+반드시 JSON 형식으로만 답변: {"totalScore": XX.XX}
+계산 과정이나 설명은 포함하지 마세요."""
+        
+        return final_prompt
+    
+    def create_job_specific_prompt(self, job_field: str, weights: Tuple, criteria: str) -> str:
+        """직무별 특화 프롬프트 생성 - 기존 인터페이스 유지"""
+        weight_config = WeightConfig.from_tuple(weights)
+        prompt_builder = PromptBuilder(weight_config)
+        return prompt_builder.build_basic_prompt(job_field, criteria)
+    
+    def create_chat_format(self, system_prompt: str, user_resume: str) -> List[Dict]:
+        """채팅 형식 구성 - 기존 인터페이스 유지"""
         user_resume += """
 Calculate resume score and return ONLY this format:
-{{"totalScore": XX.XX}}"""
+{"totalScore": XX.XX}"""
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_resume}
