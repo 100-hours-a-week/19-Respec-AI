@@ -1,4 +1,5 @@
 import re
+from typing import Dict, Optional, Tuple
 
 class ScoreParser:
     """모델 출력에서 점수를 추출하는 클래스"""
@@ -30,3 +31,49 @@ class ScoreParser:
                 return all_numbers[-1]  # 마지막 숫자 선택
             
         return "점수 추출 실패"
+
+class LanguageScoreValidator:
+    """어학점수 검증 클래스"""
+    
+    # 각 시험별 유효 점수 범위 정의
+    VALID_RANGES = {
+        "TOEIC": (0, 990),
+        "TOEFL": (0, 120),
+        "TEPS": (0, 990),
+        "IELTS": (0, 9.0),
+        "OPIC": ["NL", "NM", "NH", "IL", "IM", "IH", "AL", "AM", "AH"],
+        "JLPT": ["N5", "N4", "N3", "N2", "N1"],
+        "HSK": ["1급", "2급", "3급", "4급", "5급", "6급", "1", "2", "3", "4", "5", "6"]
+    }
+    
+    @classmethod
+    def validate_score(cls, test_type: str, score: str) -> Tuple[bool, float]:
+        """
+        어학점수 검증 및 정규화된 점수 반환
+        Returns:
+            Tuple[bool, float]: (유효성 여부, 정규화된 점수)
+        """
+        if test_type not in cls.VALID_RANGES:
+            return False, 0.0
+            
+        try:
+            if isinstance(cls.VALID_RANGES[test_type], tuple):
+                # 숫자 점수 검증
+                min_score, max_score = cls.VALID_RANGES[test_type]
+                numeric_score = float(score)
+                if min_score <= numeric_score <= max_score:
+                    # 100점 만점으로 정규화
+                    normalized_score = (numeric_score - min_score) / (max_score - min_score) * 100
+                    return True, normalized_score
+                return False, 0.0
+            else:
+                # 등급 검증
+                valid_grades = cls.VALID_RANGES[test_type]
+                if score.upper() in [str(grade).upper() for grade in valid_grades]:
+                    # 등급을 점수로 변환
+                    grade_index = len(valid_grades) - [str(grade).upper() for grade in valid_grades].index(score.upper())
+                    normalized_score = (grade_index / len(valid_grades)) * 100
+                    return True, normalized_score
+                return False, 0.0
+        except (ValueError, AttributeError):
+            return False, 0.0

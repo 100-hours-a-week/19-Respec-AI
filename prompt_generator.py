@@ -79,14 +79,24 @@ class ScoreCalculator:
         """대학교 점수 계산"""
         max_score = self.weights.education_max * self.weights.university_ratio
         
-        if rank <= 50:
+        if rank <= 3:
             return max_score
-        elif rank <= 100:
+        elif rank <= 10:
             return max_score * 0.9
-        elif rank <= 200:
+        elif rank <= 20:
             return max_score * 0.8
-        else:
+        elif rank <= 30:
+            return max_score * 0.75
+        elif rank <= 50:
             return max_score * 0.7
+        elif rank <= 100:
+            return max_score * 0.6
+        elif rank <= 200:
+            return max_score * 0.65
+        elif rank <= 300:
+            return max_score * 0.5
+        else:
+            return max_score * 0.4
     
     def calculate_certification_score(self, matches: List[Dict]) -> float:
         """자격증 점수 계산"""
@@ -337,6 +347,27 @@ class PromptBuilder:
             )
             score_calculator.scores[ScoreCategory.EXPERIENCE.value] = exp_score
             rag_section += f"\n💼 경력 총점: {exp_score:.2f}점"
+            
+        # 어학 점수 분석
+        if rag_context.get('language_scores'):
+            language_score = rag_context.get('average_language_score', 0.0)
+            # 어학 점수를 weights.language_max에 맞게 조정
+            adjusted_language_score = (language_score / 100.0) * score_calculator.weights.language_max
+            score_calculator.scores[ScoreCategory.LANGUAGE.value] = adjusted_language_score
+            
+            # 유효한 점수와 무효한 점수 정보 추가
+            valid_scores = [f"{score['test']} {score['score']}" 
+                          for score in rag_context['language_scores'] 
+                          if score['is_valid']]
+            invalid_scores = [f"{score['test']} {score['score']}" 
+                            for score in rag_context['language_scores'] 
+                            if not score['is_valid']]
+            
+            rag_section += f"\n🌐 어학 총점: {adjusted_language_score:.2f}점"
+            if valid_scores:
+                rag_section += f"\n   ✅ 유효한 점수: {', '.join(valid_scores)}"
+            if invalid_scores:
+                rag_section += f"\n   ❌ 무효 처리된 점수: {', '.join(invalid_scores)}"
         
         # 활동 분석
         if rag_context.get('activity_matches'):
@@ -353,10 +384,20 @@ class PromptGenerator:
     """메인 프롬프트 생성기 클래스 - 기존 인터페이스 유지"""
     
     def __init__(self):
+        """초기화"""
         self.similarity_threshold = 0.7
         self.max_rag_examples = 3
         self.score_calculator = None
         self.reporter = ScoreReporter()
+        self.score_breakdown = {
+            "normalized_scores": {
+                "academic": 0.0,
+                "workExperience": 0.0,
+                "certification": 0.0,
+                "languageProficiency": 0.0,
+                "extracurricular": 0.0
+            }
+        }
     
     def create_rag_enhanced_prompt(self, job_field: str, weights: Tuple, 
                                  criteria: str, rag_context: Dict) -> str:

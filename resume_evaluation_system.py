@@ -2,7 +2,7 @@ from typing import Dict, Optional
 from database_connector import DatabaseConnector
 from model_manager import ModelManager
 from prompt_generator import PromptGenerator
-from score_parser import ScoreParser
+from score_parser import ScoreParser, LanguageScoreValidator
 from vector_database import VectorDatabase
 
 class ResumeEvaluationSystem:
@@ -58,10 +58,21 @@ class ResumeEvaluationSystem:
             # 점수 추출 및 검증
             score = self._validate_score(self.score_parser.extract_score(response))
             
+            # PromptGenerator에서 계산된 정규화된 점수 가져오기
+            normalized_scores = {}
+            if self.prompt_generator.score_calculator:
+                normalized_scores = self.prompt_generator.score_calculator.normalize_to_100()
+                # 총점 계산에 기본 점수 포함
+                score = self.prompt_generator.score_calculator.get_total_score()
+            
             return {
                 "nickname": spec_data['nickname'],
                 "totalScore": score,
-                "evaluation_type": "RAG" if (rag_context and self.rag_enabled) else "Basic"
+                "academicScore": normalized_scores.get("academic", 0.0),
+                "workExperienceScore": normalized_scores.get("workExperience", 0.0),
+                "certificationScore": normalized_scores.get("certification", 0.0),
+                "languageProficiencyScore": normalized_scores.get("languageProficiency", 0.0),
+                "extracurricularScore": normalized_scores.get("extracurricular", 0.0)
             }
             
         except Exception as e:
@@ -79,7 +90,7 @@ class ResumeEvaluationSystem:
             'company_matches': [],
             'certificate_matches': [],
             'activity_matches': [],
-            'language_info': []
+            'language_scores': []
         }
         
         # 전공과 대학교 정보 수집
@@ -125,9 +136,33 @@ class ResumeEvaluationSystem:
                     activity_matches = self.vector_db.search_similar_activities(activity['name'], job_field, top_k=1)
                     if activity_matches:
                         context['activity_matches'].extend(activity_matches)
-        # 어학 정보 수집
+        # 어학 정보 수집 및 검증
         if spec_data.get('languages'):
-            context['language_info'] = spec_data['languages']
+            context['language_scores'] = []
+            total_language_score = 0.0
+            valid_score_count = 0
+            
+            for lang in spec_data['languages']:
+                is_valid, normalized_score = LanguageScoreValidator.validate_score(
+                    lang['test'], 
+                    lang['score_or_grade']
+                )
+                if is_valid:
+                    valid_score_count += 1
+                    total_language_score += normalized_score
+                
+                context['language_scores'].append({
+                    'test': lang['test'],
+                    'score': lang['score_or_grade'],
+                    'is_valid': is_valid,
+                    'normalized_score': normalized_score
+                })
+            
+            # 평균 어학 점수 계산
+            if valid_score_count > 0:
+                context['average_language_score'] = total_language_score / valid_score_count
+            else:
+                context['average_language_score'] = 0.0
         
         return context
     
