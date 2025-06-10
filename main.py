@@ -51,11 +51,21 @@ class ResumeData(BaseModel):
     final_edu: str
     final_status: str
     desired_job: str
-    universities: Optional[List[Dict]] = []
-    careers: Optional[List[Dict]] = []
+    universities: Optional[List[University]] = []
+    careers: Optional[List[Career]] = []
     certificates: Optional[List[str]] = []
-    languages: Optional[List[Dict]] = []
-    activities: Optional[List[Dict]] = []
+    languages: Optional[List[Language]] = []
+    activities: Optional[List[Activity]] = []
+
+class ResumeScore(BaseModel):
+    nickname: str
+    academicScore: float
+    workExperienceScore: float
+    certificationScore: float
+    languageProficiencyScore: float
+    extracurricularScore: float
+    totalScore: float
+    assessment: str  # LLM의 평가 내용 추가
 
 class ErrorResponse(BaseModel):
     message: str
@@ -68,8 +78,8 @@ async def get_test_page(request: Request):
     return HTMLResponse(content=html_content)
 
 @app.post("/spec/v1/post")
-async def evaluate_resume(resume_data: ResumeData):
-    """이력서 평가 엔드포인트"""
+async def evaluate_resume_v1(resume_data: ResumeData):
+    """이력서 평가 엔드포인트 V1"""
     try:
         # 입력 데이터 검증
         if not resume_data.nickname:
@@ -77,13 +87,43 @@ async def evaluate_resume(resume_data: ResumeData):
         if not resume_data.desired_job:
             raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
             
-        print(f"🔍 평가 시작: {resume_data.nickname} ({resume_data.desired_job})")
+        print(f"🔍 평가 시작 (V1): {resume_data.nickname} ({resume_data.desired_job})")
         
         result = evaluation_system.evaluate_resume(resume_data.dict())
-        
-        print(f"✅ 평가 완료: {resume_data.nickname} -> {result['totalScore']:.2f}점")
+        print(f"✅ 평가 완료 (V1): {resume_data.nickname} -> {result['totalScore']}점")
         
         return result
+    except Exception as e:
+        error_msg = f"평가 중 오류 발생: {str(e)}"
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/spec/v2/post")
+async def evaluate_resume_v2(resume_data: ResumeData):
+    """이력서 평가 엔드포인트 V2 - 세부 항목 점수 포함"""
+    try:
+        # 입력 데이터 검증
+        if not resume_data.nickname:
+            raise HTTPException(status_code=400, detail="닉네임은 필수입니다.")
+        if not resume_data.desired_job:
+            raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
+            
+        print(f"🔍 평가 시작 (V2): {resume_data.nickname} ({resume_data.desired_job})")
+        
+        # 평가 실행 및 결과 반환
+        result = evaluation_system.evaluate_resume(resume_data.dict())
+        print(f"✅ 평가 완료 (V2): {resume_data.nickname} -> {result.get('totalScore')}점")
+        
+        return {
+            "nickname": result["nickname"],
+            "totalScore": result['totalScore'],
+            "academicScore": result.get('academicScore', 0.0),
+            "workExperienceScore": result.get('workExperienceScore', 0.0),
+            "certificationScore": result.get('certificationScore', 0.0),
+            "languageProficiencyScore": result.get('languageProficiencyScore', 0.0),
+            "extracurricularScore": result.get('extracurricularScore', 0.0),
+            "assessment": result.get('assessment', '')
+        }
     except Exception as e:
         error_msg = f"평가 중 오류 발생: {str(e)}"
         print(f"❌ {error_msg}")

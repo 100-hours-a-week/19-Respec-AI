@@ -134,6 +134,37 @@
             margin-bottom: 10px;
             border: 1px solid #e5e7eb;
         }
+        .api-version-section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background-color: #f0f9ff;
+            border-radius: 8px;
+            border: 1px solid #bae6fd;
+        }
+        .api-version-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #0369a1;
+        }
+        .radio-group {
+            display: flex;
+            gap: 20px;
+        }
+        .radio-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .radio-item input[type="radio"] {
+            width: auto;
+            margin: 0;
+        }
+        .radio-item label {
+            margin: 0;
+            font-weight: normal;
+            cursor: pointer;
+        }
         .form-actions {
             display: flex;
             justify-content: center;
@@ -175,6 +206,42 @@
             text-align: center;
             margin: 20px 0;
         }
+        .detailed-scores {
+            display: none;
+            margin-top: 20px;
+        }
+        .score-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            margin-bottom: 8px;
+            background-color: white;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+        }
+        .score-label {
+            font-weight: 500;
+            color: #374151;
+        }
+        .score-value {
+            font-weight: bold;
+            color: #1f2937;
+        }
+        .score-bar-container {
+            width: 100px;
+            height: 8px;
+            background-color: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-left: 10px;
+        }
+        .score-bar {
+            height: 100%;
+            background: linear-gradient(to right, #ef4444, #f59e0b, #10b981);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
         .error-message {
             color: #b91c1c;
             background-color: #fee2e2;
@@ -183,12 +250,40 @@
             margin-bottom: 20px;
             display: none;
         }
+        .assessment-section {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        .assessment-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>스펙 평가 테스트</h1>
         <div class="error-message" id="errorMessage"></div>
+        
+        <!-- API 버전 선택 섹션 -->
+        <div class="api-version-section">
+            <div class="api-version-title">평가 방식 선택</div>
+            <div class="radio-group">
+                <div class="radio-item">
+                    <input type="radio" id="apiV1" name="apiVersion" value="v1" checked>
+                    <label for="apiV1">V1 - 총점만 보기</label>
+                </div>
+                <div class="radio-item">
+                    <input type="radio" id="apiV2" name="apiVersion" value="v2">
+                    <label for="apiV2">V2 - 세부 점수 포함</label>
+                </div>
+            </div>
+        </div>
         
         <form id="specForm">
             <!-- 기본 정보 섹션 -->
@@ -307,11 +402,68 @@
         <div class="result-section" id="resultSection">
             <h2>평가 결과</h2>
             <div class="result-score" id="resultScore"></div>
+            
+            <!-- V2 전용 세부 점수 표시 영역 -->
+            <div class="detailed-scores" id="detailedScores">
+                <h3 style="color: #0369a1; margin-bottom: 15px;">세부 점수</h3>
+                <div class="score-item">
+                    <span class="score-label">학력 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="academicScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="academicBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">경력 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="workExperienceScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="workExperienceBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">자격증 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="certificationScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="certificationBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">어학 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="languageProficiencyScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="languageProficiencyBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">활동 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="extracurricularScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="extracurricularBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="assessment-section">
+                <div class="assessment-title">상세 평가 내용</div>
+                <div id="assessment"></div>
+            </div>
         </div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // API 기본 URL 설정
+            const API_BASE_URL = window.location.origin;
+            
             // 템플릿 정의
             const templates = {
                 education: (index) => `
@@ -493,14 +645,22 @@
                 
                 // 결과 섹션 숨기기
                 document.getElementById('resultSection').style.display = 'none';
+                document.getElementById('detailedScores').style.display = 'none';
                 
                 // 에러 메시지 숨기기
                 document.getElementById('errorMessage').style.display = 'none';
+                
+                // API 버전을 V1으로 초기화
+                document.getElementById('apiV1').checked = true;
             });
 
             // 폼 제출 이벤트 리스너
             document.getElementById('specForm').addEventListener('submit', async function(e) {
                 e.preventDefault();
+                
+                // 선택된 API 버전 확인
+                const selectedVersion = document.querySelector('input[name="apiVersion"]:checked').value;
+                const apiEndpoint = selectedVersion === 'v2' ? '/spec/v2/post' : '/spec/v1/post';
                 
                 // 제출 버튼 상태 변경
                 const submitBtn = document.getElementById('submitBtn');
@@ -574,26 +734,63 @@
                 
                 try {
                     // API 호출
-                    const response = await axios.post('/spec/v1/post', data);
+                    const response = await axios.post(`${API_BASE_URL}${apiEndpoint}`, data);
                     
                     // 결과 표시
                     const resultSection = document.getElementById('resultSection');
                     const resultScore = document.getElementById('resultScore');
+                    const detailedScores = document.getElementById('detailedScores');
                     
-                    resultScore.textContent = `${response.data.totalScore}점`;
                     resultSection.style.display = 'block';
                     
-                    // alert로도 결과 표시
-                    alert(`스펙 평가 점수: ${response.data.totalScore}점`);
+                    if (selectedVersion === 'v2') {
+                        // V2 응답 처리 - 세부 점수 포함
+                        resultScore.textContent = `총점: ${response.data.totalScore.toFixed(1)}점`;
+                        
+                        // 세부 점수 업데이트
+                        document.getElementById('academicScore').textContent = `${response.data.academicScore.toFixed(1)}점`;
+                        document.getElementById('workExperienceScore').textContent = `${response.data.workExperienceScore.toFixed(1)}점`;
+                        document.getElementById('certificationScore').textContent = `${response.data.certificationScore.toFixed(1)}점`;
+                        document.getElementById('languageProficiencyScore').textContent = `${response.data.languageProficiencyScore.toFixed(1)}점`;
+                        document.getElementById('extracurricularScore').textContent = `${response.data.extracurricularScore.toFixed(1)}점`;
+                        
+                        // 프로그레스 바 업데이트
+                        document.getElementById('academicBar').style.width = `${response.data.academicScore}%`;
+                        document.getElementById('workExperienceBar').style.width = `${response.data.workExperienceScore}%`;
+                        document.getElementById('certificationBar').style.width = `${response.data.certificationScore}%`;
+                        document.getElementById('languageProficiencyBar').style.width = `${response.data.languageProficiencyScore}%`;
+                        document.getElementById('extracurricularBar').style.width = `${response.data.extracurricularScore}%`;
+                        
+                        detailedScores.style.display = 'block';
+                        
+                        // 상세 평가 내용 표시
+                        document.getElementById('assessment').textContent = response.data.assessment;
+                        
+                        // alert로도 결과 표시 (V2)
+                        const scoreMessage = `스펙 평가 점수 (세부)\n` +
+                            `총점: ${response.data.totalScore.toFixed(2)}점\n` +
+                            `학력: ${response.data.academicScore.toFixed(2)}점\n` +
+                            `경력: ${response.data.workExperienceScore.toFixed(2)}점\n` +
+                            `자격증: ${response.data.certificationScore.toFixed(2)}점\n` +
+                            `어학: ${response.data.languageProficiencyScore.toFixed(2)}점\n` +
+                            `활동: ${response.data.extracurricularScore.toFixed(2)}점`;
+                        alert(scoreMessage);
+                    } else {
+                        // V1 응답 처리 - 총점만
+                        resultScore.textContent = `총점: ${response.data.totalScore.toFixed(2)}점`;
+                        detailedScores.style.display = 'none';
+                        
+                        // alert로도 결과 표시 (V1)
+                        alert(`스펙 평가 점수\n총점: ${response.data.totalScore.toFixed(2)}점`);
+                    }
                     
+                    resultSection.style.display = 'block';
                 } catch (error) {
+                    // 에러 처리
                     console.error('Error:', error);
-                    
-                    // 에러 메시지 표시
                     const errorMessage = document.getElementById('errorMessage');
                     errorMessage.textContent = error.response?.data?.message || '평가 중 오류가 발생했습니다.';
                     errorMessage.style.display = 'block';
-                    
                 } finally {
                     // 제출 버튼 상태 복원
                     submitBtn.disabled = false;

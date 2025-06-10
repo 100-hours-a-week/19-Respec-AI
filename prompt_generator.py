@@ -296,7 +296,7 @@ class PromptBuilder:
     
     def build_basic_prompt(self, job_field: str, criteria: str) -> str:
         """기본 프롬프트 생성"""
-        return f"""당신은 사회초년생의 이력서를 지원분야와 얼마나 관련있게 작성하였는지 평가해주는 AI입니다
+        return f"""당신은 사회초년생의 이력서를 지원분야와 얼마나 관련있게 작성하였는지 분석해주는 AI입니다
 {job_field} 지원분야 이력서를 100점 만점으로 평가하세요.
 사회초년생인만큼 경력의 유무는 크게 중요하지 않습니다
 
@@ -304,7 +304,7 @@ class PromptBuilder:
 {job_field} 분야 요구사항: {criteria}
 
 === 출력 규칙 ===
-반드시 JSON 형식으로만 답변: {{"totalScore": XX.XX}}
+반드시 JSON 형식으로만 답변: {{"totalscore": XX.XX, "assessment": "구체적인 장점과 구체적인 개선방안"}}
 설명이나 다른 텍스트는 절대 포함하지 마세요."""
     
     def add_rag_context(self, base_prompt: str, rag_context: Dict, 
@@ -428,9 +428,20 @@ class PromptGenerator:
         final_prompt = enhanced_prompt + score_summary + """
 
 === ⚠️ 중요 지시사항 ===
-위에 계산된 점수들을 참고하여 최종 점수를 산출하세요.
-반드시 JSON 형식으로만 답변: {"totalScore": XX.XX}
-계산 과정이나 설명은 포함하지 마세요."""
+totalscore는 점수 계산 결과 요약의 총점을 그대로 출력하세요.
+별도의 조정이나 재계산은 하지 마세요.
+assessment는 취업 상담자의 관점에서 경력,자격증,어학능력,활동의 구체적인 장점과 구체적인 개선방안 50자 이내로 작성하세요.
+반드시 JSON 형식으로만 답변: {"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}
+
+
+=== 📋 고정 출력 형식 ===
+{"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}
+
+=== 🚫 금지 사항 ===
+- JSON 앞뒤로 설명 금지
+- 마크다운 형식 금지  
+- 단계별 분석 설명 금지
+- "분석 결과는..." 같은 서두 금지"""
         
         return final_prompt
     
@@ -443,8 +454,30 @@ class PromptGenerator:
     def create_chat_format(self, system_prompt: str, user_resume: str) -> List[Dict]:
         """채팅 형식 구성 - 기존 인터페이스 유지"""
         user_resume += """
+
+당신은 취업 상담자 입니다.
+저는 첫 취업을 준비하는 취준생입니다
+저는 입력을 학력에서는 다녔던 대학교의 이름과 성적 학위를 입력할수 있습니다
+경력입력은 회사명과 직책(인턴/정규직/대표)과 근무개월을 입력할수 있습니다
+자격증은 자격증 명만 입력할수 있습니다
+어학능력은 시험명과 점수만 입력할수 있습니다
+활동정보는 활동명과 역할 수상내역만 입력할수 있습니다
+
+=== ⚠️ 중요 지시사항 ===
+totalscore는 점수 계산 결과 요약의 총점을 그대로 출력하세요.
+별도의 조정이나 재계산은 하지 마세요.
+assessment는 취업 상담자의 관점에서 경력,자격증,어학능력,활동의 구체적인 장점과 구체적인 개선방안 50자 이내로 작성하세요.
+
+=== 📋 고정 출력 형식 ===
+{"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}
+
+=== 🚫 금지 사항 ===
+- JSON 앞뒤로 설명 금지
+- 마크다운 형식 금지  
+- 단계별 분석 설명 금지
+- "분석 결과는..." 같은 서두 금지
 Calculate resume score and return ONLY this format:
-{"totalScore": XX.XX}"""
+{"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}"""
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_resume}

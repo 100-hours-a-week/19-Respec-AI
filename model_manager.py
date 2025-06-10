@@ -4,7 +4,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 class ModelManager:
     """AI 모델 로드 및 추론 작업을 담당하는 클래스"""
     
-    def __init__(self, model_name="naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-0.5B"):
+    def __init__(self, model_name="Qwen/Qwen2-1.5B-Instruct"):
         self.model_name = model_name
         self.model = None
         self.tokenizer = None
@@ -29,7 +29,7 @@ class ModelManager:
 
             output_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=17,
+                max_new_tokens=70,
                 do_sample=True,
                 temperature=0.1,
                 repetition_penalty=1.2,

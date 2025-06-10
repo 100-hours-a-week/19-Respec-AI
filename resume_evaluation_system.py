@@ -1,3 +1,5 @@
+import json
+import re
 from typing import Dict, Optional
 from database_connector import DatabaseConnector
 from model_manager import ModelManager
@@ -55,15 +57,16 @@ class ResumeEvaluationSystem:
             if not response:
                 return self._create_default_response(spec_data['nickname'])
             
-            # 점수 추출 및 검증
-            score = self._validate_score(self.score_parser.extract_score(response))
+            # ===== 🔧 핵심 수정 부분 =====
+            # JSON에서 assessment 값만 추출
+            assessment_text = self._extract_assessment_from_response(response)
             
+            # score = self._validate_score(self.score_parser.extract_score(response))
+            score = self.prompt_generator.score_calculator.get_total_score()
             # PromptGenerator에서 계산된 정규화된 점수 가져오기
             normalized_scores = {}
             if self.prompt_generator.score_calculator:
                 normalized_scores = self.prompt_generator.score_calculator.normalize_to_100()
-                # 총점 계산에 기본 점수 포함
-                score = self.prompt_generator.score_calculator.get_total_score()
             
             return {
                 "nickname": spec_data['nickname'],
@@ -72,12 +75,85 @@ class ResumeEvaluationSystem:
                 "workExperienceScore": normalized_scores.get("workExperience", 0.0),
                 "certificationScore": normalized_scores.get("certification", 0.0),
                 "languageProficiencyScore": normalized_scores.get("languageProficiency", 0.0),
-                "extracurricularScore": normalized_scores.get("extracurricular", 0.0)
+                "extracurricularScore": normalized_scores.get("extracurricular", 0.0),
+                "assessment": assessment_text  # 📌 assessment 값만 포함
             }
             
         except Exception as e:
             print(f"평가 중 오류 발생: {e}")
             return self._create_default_response(spec_data['nickname'])
+    
+    def _extract_assessment_from_response(self, response: str) -> str:
+        """LLM 응답에서 assessment 값만 추출하는 함수"""
+        try:
+            print(f"🔍 원본 응답: {response[:200]}...")  # 디버깅용
+            
+            # 방법 1: assessment": "내용" 패턴으로 직접 추출 (가장 안전)
+            assessment_patterns = [
+                r'"assessment":\s*"([^"]*)"',  # 기본 패턴
+                r'"assessment"\s*:\s*"([^"]*)"',  # 공백 포함
+                r'assessment":\s*"([^"]*)"',  # 앞의 따옴표 없는 경우
+                r'"assessment":\s*\'([^\']*)\'',  # 작은따옴표 사용
+            ]
+            
+            for pattern in assessment_patterns:
+                match = re.search(pattern, response, re.IGNORECASE)
+                if match:
+                    assessment_text = match.group(1)
+                    print(f"✅ Pattern으로 추출 성공: {assessment_text}")
+                    return assessment_text
+            
+            # 방법 2: JSON 블록 전체 추출 후 파싱
+            json_patterns = [
+                r'\{[^}]*"assessment"[^}]*\}',  # 한 줄 JSON
+                r'\{[\s\S]*?"assessment"[\s\S]*?\}',  # 여러 줄 JSON
+            ]
+            
+            for pattern in json_patterns:
+                json_match = re.search(pattern, response)
+                if json_match:
+                    json_str = json_match.group()
+                    try:
+                        # JSON 문자열 정제
+                        json_str = json_str.replace('\n', '').replace('\r', '')
+                        parsed = json.loads(json_str)
+                        if "assessment" in parsed:
+                            assessment_text = parsed["assessment"]
+                            print(f"✅ JSON 파싱으로 추출 성공: {assessment_text}")
+                            return assessment_text
+                    except json.JSONDecodeError as je:
+                        print(f"⚠️ JSON 파싱 실패: {je}")
+                        continue
+            
+            # 방법 3: 라인별 분석 (assessment가 포함된 라인 찾기)
+            lines = response.split('\n')
+            for line in lines:
+                if 'assessment' in line.lower():
+                    # 콜론 뒤의 내용 추출
+                    if ':' in line:
+                        after_colon = line.split(':', 1)[1].strip()
+                        # 따옴표와 특수문자 제거
+                        cleaned = re.sub(r'^["\'\s,{]+|["\'\s,}]+$', '', after_colon)
+                        if cleaned and len(cleaned) > 5:  # 의미있는 길이의 텍스트
+                            print(f"✅ 라인 분석으로 추출: {cleaned}")
+                            return cleaned
+            
+            # 방법 4: 전체 응답에서 의미있는 한국어 문장 추출
+            korean_sentences = re.findall(r'[가-힣\s]{10,}', response)
+            if korean_sentences:
+                # 가장 긴 한국어 문장을 선택
+                longest_sentence = max(korean_sentences, key=len).strip()
+                if len(longest_sentence) > 10:
+                    print(f"✅ 한국어 문장 추출: {longest_sentence[:50]}...")
+                    return longest_sentence[:100]  # 100자로 제한
+            
+            print("❌ 모든 추출 방법 실패")
+            return "구체적인 스펙 분석 후 개선방안을 제시드릴 수 있습니다."
+            
+        except Exception as e:
+            print(f"❌ Assessment 추출 중 예외 발생: {e}")
+            print(f"❌ 응답 내용: {response}")
+            return "평가 내용 추출 중 오류가 발생했습니다."
     
     def _prepare_rag_context(self, spec_data: Dict, job_field: str) -> Dict:
         """RAG 컨텍스트 준비"""
@@ -107,6 +183,7 @@ class ResumeEvaluationSystem:
                     matches = self.vector_db.search_similar_majors(univ['major'], job_field, top_k=1)
                     if matches:
                         context['education_matches'].extend(matches)
+        
         # 경력 정보 수집
         if spec_data.get('careers'):
             for career in spec_data['careers']:
@@ -122,6 +199,7 @@ class ResumeEvaluationSystem:
                         for match in company_matches:
                             match['work_month'] = career.get('work_month', 0)
                         context['company_matches'].extend(company_matches)
+        
         # 자격증 정보 수집
         if spec_data.get('certificates'):
             context['certificate_matches'] = []
@@ -129,6 +207,7 @@ class ResumeEvaluationSystem:
                 cert_matches = self.vector_db.search_similar_certificates(certificate, job_field, top_k=1)
                 if cert_matches:
                     context['certificate_matches'].extend(cert_matches)
+        
         # 활동 정보 수집
         if spec_data.get('activities'):
             for activity in spec_data['activities']:
@@ -136,6 +215,7 @@ class ResumeEvaluationSystem:
                     activity_matches = self.vector_db.search_similar_activities(activity['name'], job_field, top_k=1)
                     if activity_matches:
                         context['activity_matches'].extend(activity_matches)
+        
         # 어학 정보 수집 및 검증
         if spec_data.get('languages'):
             context['language_scores'] = []
@@ -240,6 +320,12 @@ class ResumeEvaluationSystem:
         return {
             "nickname": nickname,
             "totalScore": 50.0,
+            "academicScore": 0.0,
+            "workExperienceScore": 0.0,
+            "certificationScore": 0.0,
+            "languageProficiencyScore": 0.0,
+            "extracurricularScore": 0.0,
+            "assessment": "기본 평가: 추가 정보 입력 후 재평가를 권장합니다.",
             "evaluation_type": "Default"
         }
     
