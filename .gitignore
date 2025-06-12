@@ -1,258 +1,40 @@
-# EasyOCR 모델 및 캐시
+# Python
+__pycache__/
+*.pyc
+
+# 환경/시크릿
+.env*
+secrets.*
+config.*
+*.json
+*.csv
+
+# 모델/데이터
 .EasyOCR/
 models/
-.cache/
-__pycache__/
-
-# OS Files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-desktop.ini
-
-# PDF files (개인정보 보호를 위해)
-*.pdf
-uploads/*.pdf
-temp/*.pdf
-test_files/*.pdf
-
-# 결과 파일들
-results/
-output/
-logs/
-*.log
-*.out
-
-# 임시 파일
-temp/
-tmp/
-*.tmp
-*.temp
-
-# 데이터베이스
-*.db
-*.sqlite
-*.sqlite3
-
-# 환경 설정
-.env
-.env.local
-.env.*.local
-config.ini
-secrets.json
-
-# Jupyter Notebook
-.ipynb_checkpoints/
-*.ipynb
-
-# PyTorch 모델
 *.pth
 *.pt
-*.pkl
-*.pickle
-
-# 압축 파일
-*.zip
-*.tar.gz
-*.rar
-*.7z
-
-# 이미지 파일 (테스트용 제외)
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
-*.tiff
-!test_images/
-!examples/
-
-# 비디오 파일
-*.mp4
-*.avi
-*.mkv
-*.mov
-
-# 음성 파일
-*.wav
-*.mp3
-*.flac
-
-# 문서 파일 (개인정보 포함 가능)
-*.doc
-*.docx
-*.xls
-*.xlsx
-*.ppt
-*.pptx
-
-# 백업 파일
-*.bak
-*.backup
-*~
-
-# 성능 프로파일링
-*.prof
-*.cprof
-
-# 테스트 커버리지
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# 문서 빌드
-docs/_build/
-site/
-
-# 패키지 관리
-poetry.lock
-Pipfile.lock
-
-# Node.js (웹 인터페이스용)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# 메모리 덤프
-*.hprof
-
-# 클러스터 및 분산 처리
-*.worker
-*.master
-
-# Docker
-Dockerfile.prod
-docker-compose.override.yml
-
-# 클라우드 설정
-.aws/
-.gcp/
-.azure/
-
-# API 키 및 인증 정보
-*.key
-*.pem
-*.crt
-*.cert
-credentials.json
-token.json
-
-# 개발 전용 파일
-dev/
-development/
-debug/
-sandbox/
-
-# 프로덕션 전용 파일
-production/
-prod/
-
-# 실험 및 연구
-experiments/
-research/
-notebooks/
-
-# 대용량 데이터 파일
-*.csv
-*.json
-*.xml
-*.parquet
-
-# ML/AI 모델 파일
-*.h5
-*.hdf5
 *.onnx
-*.tflite
 
-# 성능 벤치마크 결과
-benchmark_results/
-performance_tests/
-
-# 사용자 업로드 파일
-user_uploads/
-uploaded_files/
-
-# 시스템 로그
-system.log
-application.log
-error.log
-access.log
-
-# 메모리 프로파일링
-memory_profile.txt
-memory_usage.log
-
-# GPU 사용 로그
-gpu_usage.log
-cuda_cache/
-
-# Redis 덤프
-dump.rdb
-
-# SQLite WAL files
-*.db-wal
-*.db-shm
-
-# 암호화된 파일
-*.enc
-*.encrypted
-
-# 압축된 로그
-*.log.gz
-*.log.bz2
-
-# 임시 분석 결과
-analysis_temp/
-ocr_temp/
-processing_temp/
-
-# 개인정보가 포함될 수 있는 폴더
-personal_data/
-sensitive/
-confidential/
-
-# 라이선스 관련
-license_cache/
-activation_cache/
-
-# EasyOCR specific
-.EasyOCR/
-*.pth
-model/
-craft_mlt_25k.pth
-*.ckpt
-
-# Logs and databases
-*.log
-*.sqlite
-*.db
-
-# OS specific
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Project specific
+# PDF, 이미지, 테스트 파일
+*.pdf
 uploads/
 results/
 temp/
-*.pdf
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
 
-# New additions from the code block
-test.*
-.env.production
-config.json
-*.model 
+# 로그/임시
+*.log
+logs/
+tmp/
+temp/
+
+# 시스템/IDE
+.DS_Store
+.ipynb_checkpoints/
+.idea/
+.vscode/
