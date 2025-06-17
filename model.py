@@ -234,7 +234,7 @@ class ResumeSpecExtractor:
         end = min(len(text), end + window)
         return text[start:end]
 
-    def extract_specs(self, texts: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    def extract_specs(self, texts: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         텍스트에서 스펙 정보 추출
         Args:
@@ -253,7 +253,8 @@ class ResumeSpecExtractor:
                 'experience': [],
                 'job_field': None,
                 'certificates': [],
-                'languages': []
+                'languages': [],
+                'confidence_scores': {}  # 신뢰도 점수 추가
             }
             
             # 닉네임 추출
@@ -316,6 +317,24 @@ class ResumeSpecExtractor:
                 if match:
                     specs['job_field'] = match.group(1)
                     break
+            
+            # 자격증 추출
+            for pattern in self.text_patterns['certificates']:
+                matches = re.finditer(pattern, full_text)
+                for match in matches:
+                    specs['certificates'].append(match.group(0))
+            
+            # 어학 능력 추출
+            for pattern in self.text_patterns['languages']:
+                matches = re.finditer(pattern, full_text)
+                for match in matches:
+                    specs['languages'].append(match.group(0))
+            
+            # 신뢰도 점수 계산
+            for field, patterns in self.text_patterns.items():
+                matches = self._extract_pattern_matches(full_text, patterns)
+                if matches:
+                    specs['confidence_scores'][field] = len(matches) / len(patterns)
             
             return specs
             
