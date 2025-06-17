@@ -20,35 +20,31 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         
-        h1, h2 {
+        h1 {
             color: #333;
+            text-align: center;
         }
         
-        .section {
-            margin-bottom: 20px;
-            padding: 15px;
+        .upload-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .result-section {
+            margin-top: 20px;
+            padding: 20px;
             border: 1px solid #ddd;
             border-radius: 5px;
+            display: none;
         }
         
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #666;
-        }
-        
-        input[type="text"],
-        input[type="number"],
-        select {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
         }
         
         button {
@@ -56,7 +52,7 @@
             color: white;
             padding: 10px 20px;
             border: none;
-            border-radius: 4px;
+            border-radius: 5px;
             cursor: pointer;
         }
         
@@ -64,46 +60,11 @@
             background-color: #0056b3;
         }
         
-        .add-button {
-            background-color: #28a745;
-        }
-        
-        .remove-button {
-            background-color: #dc3545;
-        }
-        
-        #loading-spinner {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-            z-index: 1000;
-        }
-        
-        .spinner {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 50px;
-            height: 50px;
-            border: 5px solid #f3f3f3;
-            border-top: 5px solid #3498db;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        #error-message {
-            color: red;
-            margin-top: 10px;
+        pre {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
         }
     </style>
 </head>
@@ -111,356 +72,56 @@
     <div class="container">
         <h1>이력서 분석 시스템</h1>
         
-        <!-- PDF 업로드 섹션 -->
-        <div class="section">
-            <h2>이력서 PDF 업로드</h2>
-            <input type="file" id="pdfFile" accept=".pdf" class="file-input">
-            <button type="button" onclick="analyzePDF()" class="upload-button">이력서 분석하기</button>
+        <div class="upload-section">
+            <input type="file" id="pdfFile" accept=".pdf">
+            <button onclick="analyzePDF()">분석하기</button>
         </div>
-
-        <!-- 기본 정보 섹션 -->
-        <div class="section">
-            <h2>기본 정보</h2>
-            <div class="form-group">
-                <label for="nickname">닉네임</label>
-                <input type="text" id="nickname">
-            </div>
-            <div class="form-group">
-                <label for="jobType">지원분야</label>
-                <select id="jobType">
-                    <option value="인터넷_IT">인터넷/IT</option>
-                    <option value="경영_사무">경영/사무</option>
-                    <option value="마케팅_광고_홍보">마케팅/광고/홍보</option>
-                    <option value="디자인">디자인</option>
-                    <option value="영업_고객상담">영업/고객상담</option>
-                    <option value="서비스">서비스</option>
-                    <option value="연구_RND">연구/R&D</option>
-                    <option value="생산_제조">생산/제조</option>
-                    <option value="교육">교육</option>
-                    <option value="의료_복지">의료/복지</option>
-                    <option value="미디어_콘텐츠">미디어/콘텐츠</option>
-                </select>
-            </div>
+        
+        <div class="loading">
+            <p>분석 중입니다...</p>
         </div>
-
-        <!-- 교육 섹션 -->
-        <div class="section">
-            <h2>교육</h2>
-            <div id="educationContainer"></div>
-            <button type="button" onclick="addEducation()" class="add-button">교육 추가</button>
+        
+        <div class="result-section" id="resultSection">
+            <h2>분석 결과</h2>
+            <pre id="resultJson"></pre>
         </div>
-
-        <!-- 경력 섹션 -->
-        <div class="section">
-            <h2>경력</h2>
-            <div id="experienceContainer"></div>
-            <button type="button" onclick="addExperience()" class="add-button">경력 추가</button>
-        </div>
-
-        <!-- 자격증 섹션 -->
-        <div class="section">
-            <h2>자격증</h2>
-            <div id="certificateContainer"></div>
-            <button type="button" onclick="addCertificate()" class="add-button">자격증 추가</button>
-        </div>
-
-        <!-- 어학능력 섹션 -->
-        <div class="section">
-            <h2>어학능력</h2>
-            <div id="languageContainer"></div>
-            <button type="button" onclick="addLanguage()" class="add-button">어학능력 추가</button>
-        </div>
-
-        <!-- 활동/네트워킹 섹션 -->
-        <div class="section">
-            <h2>활동/네트워킹</h2>
-            <div id="activityContainer"></div>
-            <button type="button" onclick="addActivity()" class="add-button">활동 추가</button>
-        </div>
-
-        <!-- 저장 버튼 -->
-        <button type="button" onclick="saveAll()" style="margin-top: 20px;">저장하기</button>
     </div>
-
-    <!-- 로딩 스피너 -->
-    <div id="loading-spinner">
-        <div class="spinner"></div>
-    </div>
-
-    <!-- 에러 메시지 -->
-    <div id="error-message"></div>
 
     <script>
-        // 교육 섹션 추가
-        function addEducation(data = null) {
-            const container = document.getElementById('educationContainer');
-            const section = document.createElement('div');
-            section.className = 'form-group';
-            section.innerHTML = `
-                <input type="text" placeholder="학교명" ${data?.school ? `value="${data.school}"` : ''}>
-                <input type="text" placeholder="전공" ${data?.major ? `value="${data.major}"` : ''}>
-                <input type="number" step="0.1" placeholder="학점" ${data?.gpa ? `value="${data.gpa}"` : ''}>
-                <input type="number" step="0.1" placeholder="만점" value="${data?.gpa_max || '4.5'}">
-                <button type="button" onclick="this.parentElement.remove()" class="remove-button">삭제</button>
-            `;
-            container.appendChild(section);
-        }
-
-        // 경력 섹션 추가
-        function addExperience(data = null) {
-            const container = document.getElementById('experienceContainer');
-            const section = document.createElement('div');
-            section.className = 'form-group';
-            section.innerHTML = `
-                <input type="text" placeholder="회사명" ${data?.company ? `value="${data.company}"` : ''}>
-                <select>
-                    <option value="정규직" ${data?.position_type === '정규직' ? 'selected' : ''}>정규직</option>
-                    <option value="계약직" ${data?.position_type === '계약직' ? 'selected' : ''}>계약직</option>
-                    <option value="인턴" ${data?.position_type === '인턴' ? 'selected' : ''}>인턴</option>
-                </select>
-                <input type="number" placeholder="근무기간(개월)" ${data?.duration ? `value="${data.duration}"` : ''}>
-                <button type="button" onclick="this.parentElement.remove()" class="remove-button">삭제</button>
-            `;
-            container.appendChild(section);
-        }
-
-        // 자격증 섹션 추가
-        function addCertificate(data = null) {
-            const container = document.getElementById('certificateContainer');
-            const section = document.createElement('div');
-            section.className = 'form-group';
-            section.innerHTML = `
-                <input type="text" placeholder="자격증명" ${data?.name ? `value="${data.name}"` : ''}>
-                <input type="text" placeholder="취득일자 (YYYY.MM)" ${data?.date ? `value="${data.date}"` : ''}>
-                <button type="button" onclick="this.parentElement.remove()" class="remove-button">삭제</button>
-            `;
-            container.appendChild(section);
-        }
-
-        // 어학능력 섹션 추가
-        function addLanguage(data = null) {
-            const container = document.getElementById('languageContainer');
-            const section = document.createElement('div');
-            section.className = 'form-group';
-            section.innerHTML = `
-                <input type="text" placeholder="시험명" ${data?.test ? `value="${data.test}"` : ''}>
-                <input type="text" placeholder="점수/등급" ${data?.score ? `value="${data.score}"` : ''}>
-                <button type="button" onclick="this.parentElement.remove()" class="remove-button">삭제</button>
-            `;
-            container.appendChild(section);
-        }
-
-        // 활동 섹션 추가
-        function addActivity(data = null) {
-            const container = document.getElementById('activityContainer');
-            const section = document.createElement('div');
-            section.className = 'form-group';
-            section.innerHTML = `
-                <input type="text" placeholder="활동명" ${data?.name ? `value="${data.name}"` : ''}>
-                <input type="text" placeholder="역할/직책" ${data?.role ? `value="${data.role}"` : ''}>
-                <input type="number" placeholder="활동기간(개월)" ${data?.duration ? `value="${data.duration}"` : ''}>
-                <button type="button" onclick="this.parentElement.remove()" class="remove-button">삭제</button>
-            `;
-            container.appendChild(section);
-        }
-
-        // PDF 파일 업로드 및 분석
         async function analyzePDF() {
             const fileInput = document.getElementById('pdfFile');
-            const jobType = document.getElementById('jobType').value;
-            const nickname = document.getElementById('nickname').value;
-            const loadingSpinner = document.getElementById('loading-spinner');
-            const errorMessage = document.getElementById('error-message');
-
-            if (!fileInput.files[0]) {
-                errorMessage.textContent = 'PDF 파일을 선택해주세요.';
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('PDF 파일을 선택해주세요.');
                 return;
             }
-
+            
+            // 로딩 표시
+            document.querySelector('.loading').style.display = 'block';
+            document.getElementById('resultSection').style.display = 'none';
+            
             const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            formData.append('job_type', jobType);
-            if (nickname) {
-                formData.append('nickname', nickname);
-            }
-
-            loadingSpinner.style.display = 'block';
-            errorMessage.textContent = '';
-
+            formData.append('file', file);
+            
             try {
-                const response = await fetch('/ocrspec', {
+                const response = await fetch('/analyze', {
                     method: 'POST',
                     body: formData
                 });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
+                
                 const result = await response.json();
                 
-                if (result.status === 'success') {
-                    const specInfo = result.spec_info;
-                    
-                    // 기본 정보 설정
-                    if (specInfo.nickname) {
-                        document.getElementById('nickname').value = specInfo.nickname;
-                    }
-                    if (specInfo.job_type) {
-                        document.getElementById('jobType').value = specInfo.job_type;
-                    }
-                    
-                    // 교육 정보 설정
-                    if (specInfo.education && specInfo.education.length > 0) {
-                        const educationContainer = document.getElementById('educationContainer');
-                        educationContainer.innerHTML = '';
-                        specInfo.education.forEach(edu => {
-                            addEducation(edu);
-                        });
-                    }
-                    
-                    // 경력 정보 설정
-                    if (specInfo.experience && specInfo.experience.length > 0) {
-                        const experienceContainer = document.getElementById('experienceContainer');
-                        experienceContainer.innerHTML = '';
-                        specInfo.experience.forEach(exp => {
-                            addExperience(exp);
-                        });
-                    }
-                    
-                    // 자격증 정보 설정
-                    if (specInfo.certificates && specInfo.certificates.length > 0) {
-                        const certificateContainer = document.getElementById('certificateContainer');
-                        certificateContainer.innerHTML = '';
-                        specInfo.certificates.forEach(cert => {
-                            addCertificate(cert);
-                        });
-                    }
-                    
-                    // 어학 정보 설정
-                    if (specInfo.languages && specInfo.languages.length > 0) {
-                        const languageContainer = document.getElementById('languageContainer');
-                        languageContainer.innerHTML = '';
-                        specInfo.languages.forEach(lang => {
-                            addLanguage(lang);
-                        });
-                    }
-                    
-                    // 활동 정보 설정
-                    if (specInfo.activities && specInfo.activities.length > 0) {
-                        const activityContainer = document.getElementById('activityContainer');
-                        activityContainer.innerHTML = '';
-                        specInfo.activities.forEach(act => {
-                            addActivity(act);
-                        });
-                    }
-                } else {
-                    throw new Error(result.message || '분석 중 오류가 발생했습니다.');
-                }
+                // 결과 표시
+                document.getElementById('resultJson').textContent = 
+                    JSON.stringify(result, null, 2);
+                document.getElementById('resultSection').style.display = 'block';
             } catch (error) {
-                errorMessage.textContent = error.message;
+                alert('분석 중 오류가 발생했습니다: ' + error.message);
             } finally {
-                loadingSpinner.style.display = 'none';
-                fileInput.value = '';
+                document.querySelector('.loading').style.display = 'none';
             }
         }
-
-        // 모든 정보 저장
-        async function saveAll() {
-            const data = {
-                nickname: document.getElementById('nickname').value,
-                job_type: document.getElementById('jobType').value,
-                education: [],
-                experience: [],
-                certificates: [],
-                languages: [],
-                activities: []
-            };
-
-            // 교육 정보 수집
-            document.querySelectorAll('#educationContainer .form-group').forEach(section => {
-                const inputs = section.querySelectorAll('input');
-                data.education.push({
-                    school: inputs[0].value,
-                    major: inputs[1].value,
-                    gpa: inputs[2].value,
-                    gpa_max: inputs[3].value
-                });
-            });
-
-            // 경력 정보 수집
-            document.querySelectorAll('#experienceContainer .form-group').forEach(section => {
-                const inputs = section.querySelectorAll('input');
-                const select = section.querySelector('select');
-                data.experience.push({
-                    company: inputs[0].value,
-                    position_type: select.value,
-                    duration: inputs[1].value
-                });
-            });
-
-            // 자격증 정보 수집
-            document.querySelectorAll('#certificateContainer .form-group').forEach(section => {
-                const inputs = section.querySelectorAll('input');
-                data.certificates.push({
-                    name: inputs[0].value,
-                    date: inputs[1].value
-                });
-            });
-
-            // 어학능력 정보 수집
-            document.querySelectorAll('#languageContainer .form-group').forEach(section => {
-                const inputs = section.querySelectorAll('input');
-                data.languages.push({
-                    test: inputs[0].value,
-                    score: inputs[1].value
-                });
-            });
-
-            // 활동 정보 수집
-            document.querySelectorAll('#activityContainer .form-group').forEach(section => {
-                const inputs = section.querySelectorAll('input');
-                data.activities.push({
-                    name: inputs[0].value,
-                    role: inputs[1].value,
-                    duration: inputs[2].value
-                });
-            });
-
-            try {
-                const response = await fetch('/submit-spec', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: new URLSearchParams({
-                        nickname: data.nickname,
-                        job_type: data.job_type,
-                        education: JSON.stringify(data.education),
-                        experience: JSON.stringify(data.experience),
-                        certificates: JSON.stringify(data.certificates),
-                        languages: JSON.stringify(data.languages),
-                        activities: JSON.stringify(data.activities)
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error('저장 중 오류가 발생했습니다.');
-                }
-
-                const result = await response.json();
-                alert('성공적으로 저장되었습니다!');
-            } catch (error) {
-                alert('저장 중 오류가 발생했습니다: ' + error.message);
-            }
-        }
-
-        // 초기 폼 항목 추가
-        addEducation();
-        addExperience();
-        addCertificate();
-        addLanguage();
-        addActivity();
     </script>
 </body>
 </html> 
