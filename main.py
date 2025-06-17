@@ -1,12 +1,10 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.requests import Request
 import uvicorn
 import logging
 from model import OCRModel
-import os
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -14,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# 정적 파일 및 템플릿 설정
+# 정적 파일 및 템플릿 폴더 설정
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="static")
+templates = Jinja2Templates(directory="templates")   # ← 반드시 templates
 
 # OCR 모델 초기화
 ocr_model = OCRModel()
@@ -34,20 +32,16 @@ async def analyze_resume(file: UploadFile = File(...)):
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
         
-        # 파일 읽기
         contents = await file.read()
-        
-        # PDF 처리
         results = ocr_model.process_pdf(contents)
         
         if not results:
             raise HTTPException(status_code=400, detail="텍스트를 추출할 수 없습니다.")
         
         return {"full_text": results}
-        
     except Exception as e:
         logger.error(f"이력서 분석 중 오류 발생: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
