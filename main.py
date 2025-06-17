@@ -16,7 +16,7 @@ app = FastAPI()
 
 # 정적 파일 및 템플릿 설정
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory="static")
 
 # OCR 모델 초기화
 ocr_model = OCRModel()
