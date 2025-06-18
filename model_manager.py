@@ -39,3 +39,28 @@ class ModelManager:
         except Exception as e:
             print(f"모델 로드 오류: {e}")
             return False
+    
+    def generate_response(self, chat):
+        """모델을 사용하여 응답 생성"""
+        try:
+            inputs = self.tokenizer.apply_chat_template(
+                chat, 
+                add_generation_prompt=True, 
+                return_dict=True, 
+                return_tensors="pt"
+            )
+            inputs = inputs.to(device=self.device)
+
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=70,
+                do_sample=True,
+                temperature=0.1,
+                repetition_penalty=1.2,
+                tokenizer=self.tokenizer
+            )
+
+            return self.tokenizer.batch_decode(output_ids)[0]
+        except Exception as e:
+            print(f"모델 추론 오류: {e}")
+            return None
