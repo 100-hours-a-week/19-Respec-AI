@@ -296,16 +296,36 @@ class PromptBuilder:
     
     def build_basic_prompt(self, job_field: str, criteria: str) -> str:
         """기본 프롬프트 생성"""
-        return f"""당신은 사회초년생의 이력서를 지원분야와 얼마나 관련있게 작성하였는지 분석해주는 AI입니다
-{job_field} 지원분야 이력서를 100점 만점으로 평가하세요.
-사회초년생인만큼 경력의 유무는 크게 중요하지 않습니다
+        return f"""
+당신은 HR 전문가로서 이력서를 간결하게 평가하는 AI입니다.
 
-=== 평가 기준 ===
-{job_field} 분야 요구사항: {criteria}
+다음 이력서를 {job_field} 분야 기준으로 평가하세요.
 
-=== 출력 규칙 ===
-반드시 JSON 형식으로만 답변: {{"totalscore": XX.XX, "assessment": "구체적인 장점과 구체적인 개선방안"}}
-설명이나 다른 텍스트는 절대 포함하지 마세요."""
+평가기준: {criteria}
+
+아래 JSON 형식으로만 응답하세요:
+{{"totalscore": 숫자, "assessment": 핵심평가내용}}
+
+평가 시 고려사항:
+- 전공 일치도, 성적, 관련 경험 중심 평가
+- 신입 기준으로 평가 (경력 부족은 감점 안함)
+- assessment는 간결하게 작성
+
+**평가 공식:**
+[주요강점] + [개선필요영역] + [결론]
+
+**강점 키워드:** 전공일치, 우수성적, 관련경력, 적합자격증, 어학우수, 리더십경험
+**개선 키워드:** 어학부족, 전공미일치, 경험부족, 자격증부족, 활동경험 없음
+
+**응답 형식:**
+{{"totalscore": 점수, "assessment": 50자 이내 핵심평가}}
+
+**절대 준수사항:**
+- assessment는 반드시 50자(공백포함) 이내
+- "이력서는", "지원자는" 같은 주어 생략
+- 구체적 키워드 위주 작성
+- 이력서 내용 요약/반복 절대 금지
+- "~을 가지고 있습니다", "~를 전공했습니다" 같은 서술 금지"""
     
     def add_rag_context(self, base_prompt: str, rag_context: Dict, 
                        score_calculator: ScoreCalculator) -> str:
@@ -425,23 +445,7 @@ class PromptGenerator:
         )
         
         # 최종 프롬프트에 점수 정보 포함
-        final_prompt = enhanced_prompt + score_summary + """
-
-=== ⚠️ 중요 지시사항 ===
-totalscore는 점수 계산 결과 요약의 총점을 그대로 출력하세요.
-별도의 조정이나 재계산은 하지 마세요.
-assessment는 취업 상담자의 관점에서 경력,자격증,어학능력,활동의 구체적인 장점과 구체적인 개선방안 50자 이내로 작성하세요.
-반드시 JSON 형식으로만 답변: {"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}
-
-
-=== 📋 고정 출력 형식 ===
-{"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}
-
-=== 🚫 금지 사항 ===
-- JSON 앞뒤로 설명 금지
-- 마크다운 형식 금지  
-- 단계별 분석 설명 금지
-- "분석 결과는..." 같은 서두 금지"""
+        final_prompt = enhanced_prompt + score_summary
         
         return final_prompt
     
@@ -453,31 +457,7 @@ assessment는 취업 상담자의 관점에서 경력,자격증,어학능력,활
     
     def create_chat_format(self, system_prompt: str, user_resume: str) -> List[Dict]:
         """채팅 형식 구성 - 기존 인터페이스 유지"""
-        user_resume += """
-
-당신은 취업 상담자 입니다.
-저는 첫 취업을 준비하는 취준생입니다
-저는 입력을 학력에서는 다녔던 대학교의 이름과 성적 학위를 입력할수 있습니다
-경력입력은 회사명과 직책(인턴/정규직/대표)과 근무개월을 입력할수 있습니다
-자격증은 자격증 명만 입력할수 있습니다
-어학능력은 시험명과 점수만 입력할수 있습니다
-활동정보는 활동명과 역할 수상내역만 입력할수 있습니다
-
-=== ⚠️ 중요 지시사항 ===
-totalscore는 점수 계산 결과 요약의 총점을 그대로 출력하세요.
-별도의 조정이나 재계산은 하지 마세요.
-assessment는 취업 상담자의 관점에서 경력,자격증,어학능력,활동의 구체적인 장점과 구체적인 개선방안 50자 이내로 작성하세요.
-
-=== 📋 고정 출력 형식 ===
-{"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}
-
-=== 🚫 금지 사항 ===
-- JSON 앞뒤로 설명 금지
-- 마크다운 형식 금지  
-- 단계별 분석 설명 금지
-- "분석 결과는..." 같은 서두 금지
-Calculate resume score and return ONLY this format:
-{"totalscore": XX.XX, "assessment": 구체적인 장점과 구체적인 개선방안}"""
+        
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_resume}

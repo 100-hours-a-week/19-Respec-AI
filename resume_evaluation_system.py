@@ -251,7 +251,9 @@ class ResumeEvaluationSystem:
         sections = []
         
         # 기본 정보
-        sections.append(f"최종학력: {spec_data['final_edu']} ({spec_data['final_status']})")
+        sections.append(f"""
+=== 이력서 내용 ===
+최종학력: {spec_data['final_edu']} ({spec_data['final_status']})""")
         sections.append(f"지원직종: {spec_data['desired_job']}")
         
         # 대학 정보
