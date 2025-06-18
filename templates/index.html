@@ -3,157 +3,274 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>이력서 OCR 분석</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>이력서 OCR - S3 URL</title>
     <style>
-        .container { max-width: 800px; margin-top: 50px; }
-        .result-box { 
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .url-section {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .url-input {
+            width: 80%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            margin: 10px 0;
+        }
+        .upload-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+            margin: 5px;
+        }
+        .upload-btn:hover {
+            background-color: #45a049;
+        }
+        .result-section {
             margin-top: 20px;
             padding: 20px;
             border: 1px solid #ddd;
-            border-radius: 5px;
-            background-color: #f8f9fa;
+            border-radius: 4px;
+            background-color: #fff;
+            white-space: pre-wrap;
+            font-size: 14px;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow-y: auto;
         }
         .loading {
             display: none;
             text-align: center;
             margin: 20px 0;
         }
-        .error-message {
-            display: none;
+        .error {
             color: red;
+            text-align: center;
             margin: 10px 0;
+            display: none;
+        }
+        .info-box {
+            background-color: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        .resume-data {
+            text-align: left;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            background-color: #fafafa;
+        }
+        .section h4 {
+            margin: 0 0 10px 0;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 5px;
+        }
+        .item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: white;
+            border-radius: 3px;
+            border-left: 3px solid #4CAF50;
+        }
+        .cert {
+            display: inline-block;
+            background-color: #e8f5e8;
+            padding: 4px 8px;
+            margin: 2px;
+            border-radius: 3px;
+            font-size: 12px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="text-center mb-4">이력서 OCR 분석</h1>
+        <h1>이력서 OCR - S3 URL</h1>
         
-        <form id="uploadForm" class="mb-4">
-            <div class="mb-3">
-                <label for="file" class="form-label">이력서 PDF 파일 선택</label>
-                <input type="file" class="form-control" id="file" accept=".pdf" required>
-            </div>
-            <button type="submit" class="btn btn-primary">분석 시작</button>
-        </form>
+        
 
-        <div class="loading">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-2">이력서 분석 중...</p>
+        <div class="url-section">
+            <input type="text" id="s3Url" class="url-input" placeholder="S3 URL을 입력하세요 (예: https://bucket.s3.amazonaws.com/file.pdf)">
+            <br>
+            <button class="upload-btn" onclick="processS3Url()">이력서 분석 시작</button>
         </div>
 
-        <div class="error-message"></div>
-
-        <div class="result-box" style="display: none;">
-            <h3>분석 결과</h3>
-            <div id="result"></div>
+        <div class="loading" id="loading">
+            처리 중... 잠시만 기다려주세요.
         </div>
 
-        <div id="resultBox" class="mt-4" style="display: none;">
-            <h4>분석 결과</h4>
-            <div class="card">
-                <div class="card-body">
-                    <div id="fullText" class="text-content" style="white-space: pre-line; line-height: 1.8; font-size: 1.1em; font-family: 'Noto Sans KR', sans-serif;"></div>
-                </div>
-            </div>
+        <div class="error" id="error"></div>
+
+        <div class="result-section" id="result" style="display: none;">
+            <h3>📄 이력서 분석 결과:</h3>
+            <div id="extractedText"></div>
         </div>
     </div>
 
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const result = document.getElementById('result');
+        const extractedText = document.getElementById('extractedText');
+        const s3UrlInput = document.getElementById('s3Url');
+
+        function formatStructuredData(data) {
+            let html = '<div class="resume-data">';
             
-            const fileInput = document.getElementById('file');
-            const file = fileInput.files[0];
+            // 대학교 정보
+            if (data.universities && data.universities.length > 0) {
+                html += '<div class="section"><h4>🎓 학력</h4>';
+                data.universities.forEach(uni => {
+                    html += `<div class="item">`;
+                    html += `<strong>학교:</strong> ${uni.school_name || '-'}<br>`;
+                    html += `<strong>학위:</strong> ${uni.degree || '-'}<br>`;
+                    html += `<strong>전공:</strong> ${uni.major || '-'}<br>`;
+                    html += `<strong>학점:</strong> ${uni.gpa || '-'}/${uni.gpa_max || '-'}`;
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
             
-            if (!file) {
-                showError('파일을 선택해주세요.');
+            // 경력 정보
+            if (data.careers && data.careers.length > 0) {
+                html += '<div class="section"><h4>💼 경력</h4>';
+                data.careers.forEach(career => {
+                    html += `<div class="item">`;
+                    html += `<strong>회사:</strong> ${career.company || '-'}<br>`;
+                    html += `<strong>직무:</strong> ${career.role || '-'}<br>`;
+                    html += `<strong>근무기간:</strong> ${career.work_month || '-'}개월`;
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            
+            // 자격증
+            if (data.certificates && data.certificates.length > 0) {
+                html += '<div class="section"><h4>자격증</h4>';
+                html += '<div class="item">';
+                data.certificates.forEach(cert => {
+                    html += `<span class="cert">${cert}</span> `;
+                });
+                html += '</div></div>';
+            }
+            
+            // 언어
+            if (data.languages && data.languages.length > 0) {
+                html += '<div class="section"><h4>어학</h4>';
+                data.languages.forEach(lang => {
+                    html += `<div class="item">`;
+                    html += `<strong>시험:</strong> ${lang.test || '-'}<br>`;
+                    html += `<strong>점수:</strong> ${lang.score_or_grade || '-'}`;
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            
+            // 활동
+            if (data.activities && data.activities.length > 0) {
+                html += '<div class="section"><h4>활동</h4>';
+                data.activities.forEach(activity => {
+                    html += `<div class="item">`;
+                    html += `<strong>활동명:</strong> ${activity.name || '-'}<br>`;
+                    html += `<strong>역할:</strong> ${activity.role || '-'}<br>`;
+                    html += `<strong>수상:</strong> ${activity.award || '-'}`;
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        async function processS3Url() {
+            const s3Url = s3UrlInput.value.trim();
+            if (!s3Url) {
+                error.textContent = 'S3 URL을 입력해주세요.';
+                error.style.display = 'block';
                 return;
             }
 
-            // 파일 형식 검사
-            if (!file.name.toLowerCase().endsWith('.pdf')) {
-                showError('PDF 파일만 업로드 가능합니다.');
+            // URL 형식 검증
+            if (!s3Url.startsWith('http://') && !s3Url.startsWith('https://')) {
+                error.textContent = '올바른 URL 형식을 입력해주세요.';
+                error.style.display = 'block';
                 return;
             }
 
-            // UI 상태 초기화
-            showLoading();
-            hideError();
-            hideResult();
-
-            const formData = new FormData();
-            formData.append('file', file);
+            // UI 초기화
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            result.style.display = 'none';
 
             try {
                 const response = await fetch('/ocrspec', {
                     method: 'POST',
-                    body: formData
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ filelink: s3Url }),
+                    signal: AbortSignal.timeout(300000) // 5분 타임아웃
                 });
 
-                const data = await response.json();
-
-                if (response.ok) {
-                    displayResults(data);
-                } else {
-                    showError(data.detail || '분석 중 오류가 발생했습니다.');
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'S3 URL 처리 중 오류가 발생했습니다.');
                 }
-            } catch (error) {
-                showError('서버 통신 중 오류가 발생했습니다.');
+
+                const data = await response.json();
+                
+                // 구조화된 데이터 표시
+                extractedText.innerHTML = formatStructuredData(data);
+                result.style.display = 'block';
+            } catch (err) {
+                error.textContent = err.message;
+                error.style.display = 'block';
             } finally {
-                hideLoading();
+                loading.style.display = 'none';
+            }
+        }
+
+        // Enter 키로도 처리 가능하도록
+        s3UrlInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                processS3Url();
             }
         });
-
-        function showLoading() {
-            document.querySelector('.loading').style.display = 'block';
-        }
-
-        function hideLoading() {
-            document.querySelector('.loading').style.display = 'none';
-        }
-
-        function showError(message) {
-            const errorDiv = document.querySelector('.error-message');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-        }
-
-        function hideError() {
-            document.querySelector('.error-message').style.display = 'none';
-        }
-
-        function displayResults(data) {
-            const resultBox = document.getElementById('resultBox');
-            const fullText = document.getElementById('fullText');
-            
-            // 전체 텍스트 표시 (빈 줄 제거하고 깔끔하게 표시)
-            const cleanText = data.full_text
-                .filter(text => text.trim().length > 0)
-                .map(text => text.trim())
-                .join('\n');  // 단락 구분을 위해 두 줄 띄우기
-            
-            fullText.textContent = cleanText;
-            resultBox.style.display = 'block';
-        }
-
-        function hideResult() {
-            document.querySelector('.result-box').style.display = 'none';
-        }
-
-        function getSectionName(section) {
-            const names = {
-                'education': '학력',
-                'experience': '경력',
-                'skills': '기술',
-                'certificates': '자격증',
-                'languages': '어학'
-            };
-            return names[section] || section;
-        }
     </script>
 </body>
 </html> 
