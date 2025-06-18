@@ -8,6 +8,12 @@ import PyPDF2
 import fitz  # PyMuPDF
 import re
 from datetime import datetime
+import torch
+import os
+import requests
+import boto3
+from urllib.parse import urlparse
+import tempfile
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -17,8 +23,92 @@ class OCRModel:
     def __init__(self):
         """EasyOCR 모델 초기화"""
         logger.info("EasyOCR 모델 초기화 중...")
-        self.reader = easyocr.Reader(['ko', 'en'])
-        logger.info("EasyOCR 모델 초기화 완료")
+        
+        # GPU 사용 가능 여부 확인
+        if torch.backends.mps.is_available():
+            device = 'mps'
+            logger.info("MPS (Apple Silicon GPU) 사용")
+            # EasyOCR이 MPS를 인식하도록 환경 변수 설정
+            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+        elif torch.cuda.is_available():
+            device = 'cuda'
+            logger.info("CUDA GPU 사용")
+        else:
+            device = 'cpu'
+            logger.info("CPU 사용")
+        
+        # EasyOCR 초기화 시 GPU 사용 설정
+        gpu_available = device != 'cpu'
+        self.reader = easyocr.Reader(['ko', 'en'], gpu=gpu_available)
+        logger.info(f"EasyOCR 모델 초기화 완료 (GPU: {gpu_available})")
+
+    def download_from_s3_url(self, s3_url: str) -> bytes:
+        """S3 URL에서 PDF 파일 다운로드"""
+        try:
+            logger.info(f"URL에서 파일 다운로드 중: {s3_url}")
+            
+            # URL 파싱
+            parsed_url = urlparse(s3_url)
+            
+            # AWS S3 URL인지 확인
+            if parsed_url.scheme == 'https' and 's3' in parsed_url.netloc and 'amazonaws.com' in parsed_url.netloc:
+                # AWS S3 URL인 경우 - 먼저 일반 HTTP 요청으로 시도
+                try:
+                    logger.info("AWS S3 URL을 일반 HTTP 요청으로 처리 시도...")
+                    response = requests.get(s3_url, timeout=30)
+                    response.raise_for_status()
+                    logger.info(f"S3 URL에서 파일 다운로드 완료: {len(response.content)} bytes")
+                    return response.content
+                except Exception as s3_error:
+                    logger.warning(f"S3 URL을 일반 HTTP로 처리 실패: {str(s3_error)}")
+                    logger.info("boto3를 사용한 S3 접근 시도...")
+                    
+                    # boto3를 사용한 S3 접근 시도
+                    try:
+                        bucket_name = parsed_url.netloc.split('.')[0]
+                        object_key = parsed_url.path.lstrip('/')
+                        
+                        # boto3 클라이언트 생성
+                        s3_client = boto3.client('s3')
+                        
+                        # 파일 다운로드
+                        response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+                        file_content = response['Body'].read()
+                        
+                        logger.info(f"S3에서 파일 다운로드 완료: {len(file_content)} bytes")
+                        return file_content
+                    except Exception as boto_error:
+                        logger.error(f"boto3 S3 접근 실패: {str(boto_error)}")
+                        raise Exception(f"S3 URL 접근 실패. 파일이 공개되어 있는지 확인하세요: {str(boto_error)}")
+            else:
+                # 일반 HTTP/HTTPS URL
+                response = requests.get(s3_url, timeout=30)
+                response.raise_for_status()
+                logger.info(f"일반 URL에서 파일 다운로드 완료: {len(response.content)} bytes")
+                return response.content
+                
+        except Exception as e:
+            logger.error(f"URL에서 파일 다운로드 실패: {str(e)}")
+            raise
+
+    def process_pdf_from_url(self, s3_url: str) -> List[str]:
+        """S3 URL에서 PDF 파일을 다운로드하고 처리"""
+        try:
+            # S3 URL에서 파일 다운로드
+            pdf_data = self.download_from_s3_url(s3_url)
+            
+            # PDF 처리
+            results = self.process_pdf(pdf_data)
+            
+            # 결과를 텍스트 리스트로 변환
+            if isinstance(results, list):
+                return results
+            else:
+                return [str(results)]
+                
+        except Exception as e:
+            logger.error(f"URL에서 PDF 처리 실패: {str(e)}")
+            raise
 
     def preprocess_text(self, text: str) -> str:
         """텍스트 전처리 및 정제
@@ -157,8 +247,8 @@ class OCRModel:
             logger.error(f"PDF 처리 실패: {str(e)}")
             return []
 
-    def parse_resume(self, ocr_results: List[Dict]) -> Dict:
-        """이력서 파싱"""
+    def parse_resume(self, ocr_results: List[str]) -> Dict:
+        """이력서 파싱 - OCR 결과를 구조화된 데이터로 변환"""
         result = {
             "universities": [],
             "careers": [],
@@ -170,215 +260,393 @@ class OCRModel:
             "introduction": ""
         }
 
-        current_section = None
-        section_text = []
+        # OCR 결과를 하나의 텍스트로 합치기
+        full_text = "\n".join(ocr_results) if isinstance(ocr_results, list) else str(ocr_results)
         
-        # 정규표현식 패턴
-        patterns = {
-            "university": {
-                "name": r'([가-힣a-zA-Z\s]+대학교|대학)',
-                "degree": r'(수료|전문학사|학사|석사|박사)',
-                "major": r'([가-힣a-zA-Z\s]+(학과|전공))',
-                "status": r'(졸업|재학|휴학|수료)',
-                "date": r'(\d{4})[년\.](\d{1,2})[월\.](\d{1,2})[일]?'
-            },
-            "career": {
-                "company": r'([가-힣a-zA-Z\s]+(주식회사|기업|회사|기관|㈜))',
-                "role": r'([가-힣a-zA-Z\s]+(직원|사원|인턴|대리|과장|차장|부장|이사|팀장|매니저))',
-                "duration": r'(\d{4})[년\.](\d{1,2})[월\.](\d{1,2})[일]?\s*[-~]\s*(\d{4})[년\.](\d{1,2})[월\.](\d{1,2})[일]?'
-            },
-            "language": {
-                "test": r'(TOEIC|TOEFL|TEPS|G-TELP|FLEX|OPIc|TOEIC Speaking|TEPS Speaking|G-TELP Speaking|IELTS|SNULT|HSK|JPT)',
-                "score": r'(\d+|[A-Z]+[0-9]*)',
-                "date": r'(\d{4})[년\.](\d{1,2})[월\.](\d{1,2})[일]?'
-            }
-        }
-
-        # Process each text item
-        for item in ocr_results:
-            text = item['text'].strip()
-            if not text:
-                continue
-
-            # Check if this is a section header
-            section = self.is_section_header(text)
-            if section:
-                # Process previous section if exists
-                if current_section and section_text:
-                    self.process_section(current_section, section_text, result, patterns)
-                current_section = section
-                section_text = []
-            elif current_section:
-                section_text.append(text)
-
-        # Process the last section
-        if current_section and section_text:
-            self.process_section(current_section, section_text, result, patterns)
-
+        # 디버그: OCR 결과 로깅
+        logger.info("=== OCR 결과 ===")
+        logger.info(full_text)
+        logger.info("=== OCR 결과 끝 ===")
+        
+        # 텍스트를 줄 단위로 분리
+        lines = full_text.split('\n')
+        
+        # 범용적 파싱 로직
+        self.parse_universal_resume(lines, result)
+        
+        # 디버그: 파싱 결과 로깅
+        logger.info("=== 파싱 결과 ===")
+        logger.info(f"Universities: {result.get('universities', [])}")
+        logger.info(f"Careers: {result.get('careers', [])}")
+        logger.info(f"Certificates: {result.get('certificates', [])}")
+        logger.info(f"Languages: {result.get('languages', [])}")
+        logger.info(f"Activities: {result.get('activities', [])}")
+        logger.info("=== 파싱 결과 끝 ===")
+        
         return result
 
-    def is_section_header(self, text: str) -> str:
-        """섹션 헤더 식별"""
-        sections = {
-            "학력": ["학력", "교육", "학교", "전공", "학위", "education", "academic"],
-            "경력": ["경력", "직무경험", "업무경험", "인턴십", "경험", "근무", "career", "experience", "work"],
-            "자격증": ["자격증", "자격", "면허", "수료증", "certificate", "license"],
-            "어학": ["어학", "외국어", "language", "toeic", "토익", "토플", "toefl", "ielts"],
-            "활동": ["활동", "대외활동", "프로젝트", "동아리", "봉사활동", "activity", "project"],
-            "기술": ["기술", "스킬", "skill", "기술스택", "tech stack"],
-            "수상": ["수상", "수상경력", "award", "prize"],
-            "자기소개": ["자기소개", "소개", "introduction", "about"]
-        }
+    def parse_universal_resume(self, lines: List[str], result: Dict):
+        """범용적 이력서 파싱 로직"""
+        # 전체 텍스트를 하나로 합치기
+        full_text = "\n".join(lines)
         
-        text = text.lower()
-        for section, keywords in sections.items():
-            if any(keyword.lower() in text for keyword in keywords):
-                return section
-        return ""
+        # 1. 학력 정보 추출
+        self.extract_education_direct(lines, result)
+        
+        # 2. 경력 정보 추출
+        self.extract_career_direct(lines, result)
+        
+        # 3. 자격증 정보 추출
+        self.extract_certificate_direct(lines, result)
+        
+        # 4. 어학 정보 추출
+        self.extract_language_direct(lines, result)
+        
+        # 5. 활동 정보 추출
+        self.extract_activity_direct(lines, result)
+        
+        # 6. 스킬 정보 추출
+        self.extract_skill_direct(lines, result)
 
-    def process_section(self, section: str, texts: List[str], result: Dict, patterns: Dict):
-        """섹션 처리"""
-        if section == "학력":
-            self.process_education(texts, result, patterns)
-        elif section == "경력":
-            self.process_career(texts, result, patterns)
-        elif section == "자격증":
-            self.process_certificates(texts, result, patterns)
-        elif section == "어학":
-            self.process_languages(texts, result, patterns)
-        elif section == "활동":
-            self.process_activities(texts, result, patterns)
-        elif section == "기술":
-            self.process_skills(texts, result, patterns)
-        elif section == "수상":
-            self.process_awards(texts, result, patterns)
-        elif section == "자기소개":
-            result["introduction"] = " ".join(texts)
+    def extract_education_direct(self, lines: List[str], result: Dict):
+        """직접적 학력 정보 추출"""
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 학교명 추출
+            school_patterns = [
+                r'([가-힣a-zA-Z\s]+(?:고등학교|대학교|대학|전문대학|컬리지|college|university))',
+                r'([가-힣a-zA-Z\s]+(?:학교|학교))'
+            ]
+            
+            for pattern in school_patterns:
+                match = re.search(pattern, line)
+                if match:
+                    school_name = match.group(1).strip()
+                    
+                    # 학위 확인
+                    degree = "학사"
+                    if "고등학교" in school_name:
+                        degree = "고등학교"
+                    elif any(keyword in line for keyword in ['석사', '대학원', 'master']):
+                        degree = "석사"
+                    elif any(keyword in line for keyword in ['박사', 'doctor']):
+                        degree = "박사"
+                    elif any(keyword in line for keyword in ['전문학사', 'associate']):
+                        degree = "전문학사"
+                    
+                    # 전공 확인
+                    major = ""
+                    if "학과" in line or "전공" in line:
+                        major_match = re.search(r'([가-힣a-zA-Z\s]+(?:학과|전공))', line)
+                        if major_match:
+                            major = major_match.group(1).strip()
+                    elif i + 1 < len(lines):
+                        next_line = lines[i + 1].strip()
+                        if "학과" in next_line or "전공" in next_line:
+                            major = next_line
+                    
+                    # 중복 확인
+                    existing_schools = [uni["name"] for uni in result["universities"]]
+                    if school_name not in existing_schools:
+                        result["universities"].append({
+                            "name": school_name,
+                            "degree": degree,
+                            "major": major,
+                            "gpa": 0.0,
+                            "gpa_max": 4.5
+                        })
+                    break
 
-    def process_education(self, texts: List[str], result: Dict, patterns: Dict):
-        """학력 정보 처리"""
-        current_edu = {}
-        for text in texts:
-            # 대학교명
-            if re.search(patterns["university"]["name"], text):
-                if current_edu:
-                    result["universities"].append(current_edu)
-                current_edu = {"name": text.strip()}
-            # 학위
-            elif re.search(patterns["university"]["degree"], text):
-                current_edu["degree"] = text.strip()
-            # 전공
-            elif re.search(patterns["university"]["major"], text):
-                current_edu["major"] = text.strip()
-            # 상태
-            elif re.search(patterns["university"]["status"], text):
-                current_edu["status"] = text.strip()
-            # 날짜
-            elif re.search(patterns["university"]["date"], text):
-                date = self.normalize_date(text)
-                if date:
-                    current_edu["date"] = date
-
-        if current_edu:
-            result["universities"].append(current_edu)
-
-    def process_career(self, texts: List[str], result: Dict, patterns: Dict):
-        """경력 정보 처리"""
-        current_career = {}
-        for text in texts:
-            # 회사명
-            if re.search(patterns["career"]["company"], text):
+    def extract_career_direct(self, lines: List[str], result: Dict):
+        """직접적 경력 정보 추출"""
+        current_career = None
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 회사명 추출
+            company_patterns = [
+                r'([가-힣a-zA-Z\s]+(?:사원|주식회사|회사|기업|corporation|corp|inc|llc|co\.|ltd))',
+                r'([가-힣a-zA-Z\s]+(?:그룹|시스템|솔루션|테크|tech|디자인|개발|마케팅))',
+                r'([가-힣a-zA-Z\s]+(?:스튜디오|랩|연구소|센터|아카데미))'
+            ]
+            
+            is_company_line = False
+            company_name = ""
+            
+            for pattern in company_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    company_name = match.group(1).strip()
+                    is_company_line = True
+                    break
+            
+            if is_company_line:
                 if current_career:
                     result["careers"].append(current_career)
-                current_career = {"company": text.strip()}
-            # 직무
-            elif re.search(patterns["career"]["role"], text):
-                current_career["role"] = text.strip()
-            # 기간
-            elif re.search(patterns["career"]["duration"], text):
-                dates = re.findall(r'(\d{4})[년\.](\d{1,2})[월\.](\d{1,2})[일]?', text)
-                if len(dates) >= 2:
-                    start_date = f"{dates[0][0]}-{dates[0][1].zfill(2)}-{dates[0][2].zfill(2)}"
-                    end_date = f"{dates[1][0]}-{dates[1][1].zfill(2)}-{dates[1][2].zfill(2)}"
-                    current_career["start_date"] = start_date
-                    current_career["end_date"] = end_date
-
+                
+                current_career = {
+                    "company": company_name,
+                    "role": "",
+                    "work_month": 0
+                }
+                continue
+            
+            # 직무 추출
+            if current_career:
+                role_patterns = [
+                    r'(디자이너|개발자|프로그래머|엔지니어|매니저|팀장|사원|주임|대리|과장|차장|부장|이사|CEO|CTO|CFO|COO)',
+                    r'([가-힣a-zA-Z\s]+(?:담당|책임|리드|매니저|어시스턴트|인턴|보조))',
+                    r'(designer|developer|engineer|manager|assistant|intern)'
+                ]
+                
+                for pattern in role_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match and not current_career["role"]:
+                        current_career["role"] = match.group(1).strip()
+                        break
+            
+            # 근무기간 추출 (간단한 개월수만)
+            if current_career:
+                # 개월 단위
+                month_match = re.search(r'(\d+)\s*개월', line)
+                if month_match:
+                    current_career["work_month"] = int(month_match.group(1))
+                    continue
+        
+        # 마지막 경력 추가
         if current_career:
             result["careers"].append(current_career)
 
-    def process_certificates(self, texts: List[str], result: Dict, patterns: Dict):
-        """자격증 정보 처리"""
-        for text in texts:
-            cert = {"name": text.strip()}
-            date = self.normalize_date(text)
-            if date:
-                cert["date"] = date
-            result["certificates"].append(cert)
-
-    def process_languages(self, texts: List[str], result: Dict, patterns: Dict):
-        """어학 정보 처리"""
-        current_lang = {}
-        for text in texts:
-            # 시험 종류
-            if re.search(patterns["language"]["test"], text):
-                if current_lang:
-                    result["languages"].append(current_lang)
-                current_lang = {"test": text.strip()}
-            # 점수
-            elif re.search(patterns["language"]["score"], text):
-                current_lang["score"] = text.strip()
-            # 날짜
-            elif re.search(patterns["language"]["date"], text):
-                date = self.normalize_date(text)
-                if date:
-                    current_lang["date"] = date
-
-        if current_lang:
-            result["languages"].append(current_lang)
-
-    def process_activities(self, texts: List[str], result: Dict, patterns: Dict):
-        """활동 정보 처리"""
-        current_activity = {"description": " ".join(texts)}
-        date = self.normalize_date(" ".join(texts))
-        if date:
-            current_activity["date"] = date
-        result["activities"].append(current_activity)
-
-    def process_skills(self, texts: List[str], result: Dict, patterns: Dict):
-        """기술 스택 처리"""
-        for text in texts:
-            skills = [skill.strip() for skill in text.split(',')]
-            result["skills"].extend(skills)
-
-    def process_awards(self, texts: List[str], result: Dict, patterns: Dict):
-        """수상 정보 처리"""
-        current_award = {"description": " ".join(texts)}
-        date = self.normalize_date(" ".join(texts))
-        if date:
-            current_award["date"] = date
-        result["awards"].append(current_award)
-
-    def normalize_date(self, date_str: str) -> Optional[str]:
-        """날짜 형식 정규화"""
-        try:
-            # 다양한 날짜 형식 처리
-            date_patterns = [
-                r'(\d{4})[년\.](\d{1,2})[월\.](\d{1,2})[일]?',
-                r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})',
-                r'(\d{4})(\d{2})(\d{2})'
+    def extract_certificate_direct(self, lines: List[str], result: Dict):
+        """직접적 자격증 정보 추출"""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 자격증 패턴들
+            certificate_patterns = [
+                # 운전면허
+                r'(운전면허증?|운전면허|driver.?license)',
+                # Adobe 제품
+                r'(Photoshop|포토샵|adobe.?photoshop)',
+                r'(Illustrator|일러스트레이터|adobe.?illustrator|111ustrator)',
+                r'(InDesign|인디자인|adobe.?indesign)',
+                r'(Premiere|프리미어|adobe.?premiere)',
+                r'(After.?Effects|애프터이펙트|adobe.?after.?effects)',
+                # Microsoft Office
+                r'(Office|오피스|microsoft.?office|M5 office)',
+                r'(Word|워드|microsoft.?word)',
+                r'(Excel|엑셀|microsoft.?excel)',
+                r'(PowerPoint|파워포인트|microsoft.?powerpoint)',
+                # IT 자격증
+                r'(정보처리기사|정보처리산업기사|정보처리기능사)',
+                r'(컴퓨터활용능력|컴활)',
+                r'(워드프로세서|워드)',
+                r'(컴퓨터그래픽스운용기능사|컴퓨터그래픽스)',
+                r'(사무자동화산업기사|사무자동화)',
+                r'(전자계산기조직응용기사|전자계산기)',
+                # 어학 자격증
+                r'(토익|TOEIC|toeic)',
+                r'(토플|TOEFL|toefl)',
+                r'(오픽|OPIc|opic)',
+                r'(텝스|TEPS|teps)',
+                r'(일본어능력시험|JLPT|jlpt)',
+                r'(중국어능력시험|HSK|hsk)',
+                r'(한국어능력시험|TOPIK|topik)',
+                # 기타 자격증
+                r'(기사|산업기사|기능사)',
+                r'(자격증|자격|certificate|cert)'
             ]
             
-            for pattern in date_patterns:
-                match = re.search(pattern, date_str)
+            for pattern in certificate_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
                 if match:
-                    year, month, day = match.groups()
-                    return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                    cert_name = match.group(1).strip()
+                    if cert_name not in result["certificates"]:
+                        result["certificates"].append(cert_name)
+                    break
+
+    def extract_language_direct(self, lines: List[str], result: Dict):
+        """직접적 어학 정보 추출"""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
             
-            # 상대적 날짜 처리 (예: "현재", "~")
-            if date_str in ["현재", "~", "present", "now"]:
-                return datetime.now().strftime("%Y-%m-%d")
+            # 어학 시험 패턴들
+            language_patterns = [
+                r'(토익|TOEIC|toeic)\s*(\d+)',
+                r'(토플|TOEFL|toefl)\s*(\d+)',
+                r'(오픽|OPIc|opic)\s*([가-힣a-zA-Z]+)',
+                r'(텝스|TEPS|teps)\s*(\d+)',
+                r'(일본어능력시험|JLPT|jlpt)\s*([가-힣a-zA-Z]+)',
+                r'(중국어능력시험|HSK|hsk)\s*([가-힣a-zA-Z]+)',
+                r'(한국어능력시험|TOPIK|topik)\s*([가-힣a-zA-Z]+)',
+                r'(영어|English)\s*([가-힣a-zA-Z]+)',
+                r'(일본어|Japanese)\s*([가-힣a-zA-Z]+)',
+                r'(중국어|Chinese)\s*([가-힣a-zA-Z]+)'
+            ]
+            
+            for pattern in language_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    test_name = match.group(1).strip()
+                    score = match.group(2).strip()
+                    
+                    # 중복 확인
+                    existing = [lang["test"] for lang in result["languages"]]
+                    if test_name not in existing:
+                        result["languages"].append({
+                            "test": test_name,
+                            "score_or_grade": score
+                        })
+                    break
+
+    def extract_activity_direct(self, lines: List[str], result: Dict):
+        """직접적 활동 정보 추출"""
+        current_activity = None
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 활동 패턴들
+            activity_patterns = [
+                r'([가-힣a-zA-Z\s]+(?:전시회|축제|컨퍼런스|세미나|워크샵|프로젝트|동아리|봉사|인턴십|경진대회|대회|해커톤|해커톤))',
+                r'([가-힣a-zA-Z\s]+(?:연구|개발|디자인|마케팅|기획|운영|관리))',
+                r'([가-힣a-zA-Z\s]+(?:클럽|모임|단체|조직|협회))'
+            ]
+            
+            is_activity_line = False
+            activity_name = ""
+            
+            for pattern in activity_patterns:
+                match = re.search(pattern, line)
+                if match:
+                    activity_name = match.group(1).strip()
+                    is_activity_line = True
+                    break
+            
+            if is_activity_line:
+                if current_activity:
+                    result["activities"].append(current_activity)
                 
-            return None
-        except Exception as e:
-            logger.warning(f"날짜 변환 실패: {str(e)}")
-            return None 
+                current_activity = {
+                    "name": activity_name,
+                    "role": "",
+                    "award": ""
+                }
+                continue
+            
+            # 역할 추출
+            if current_activity:
+                role_patterns = [
+                    r'(전시주관|행사진행|기획|운영|참여|활동|담당|책임|리드|매니저|어시스턴트|인턴)',
+                    r'([가-힣a-zA-Z\s]+(?:담당|책임|리드|매니저|어시스턴트|인턴))',
+                    r'(organizer|manager|assistant|intern|participant|leader)'
+                ]
+                
+                for pattern in role_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match and not current_activity["role"]:
+                        current_activity["role"] = match.group(1).strip()
+                        break
+            
+            # 수상 내역 추출
+            if current_activity:
+                award_patterns = [
+                    r'(수상|우수상|최우수상|대상|금상|은상|동상|특별상|장려상)',
+                    r'(award|prize|winner|champion|finalist)'
+                ]
+                
+                for pattern in award_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match and not current_activity["award"]:
+                        current_activity["award"] = match.group(1).strip()
+                        break
+        
+        # 마지막 활동 추가
+        if current_activity:
+            result["activities"].append(current_activity)
+
+    def extract_skill_direct(self, lines: List[str], result: Dict):
+        """직접적 스킬 정보 추출"""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 기술 스킬 패턴들
+            skill_patterns = [
+                # 프로그래밍 언어
+                r'(Python|파이썬)',
+                r'(Java|자바)',
+                r'(JavaScript|자바스크립트|JS)',
+                r'(TypeScript|타입스크립트|TS)',
+                r'(C\+\+|C\+\+11|C\+\+14|C\+\+17)',
+                r'(C#|C샵)',
+                r'(PHP|피에이치피)',
+                r'(Ruby|루비)',
+                r'(Go|고)',
+                r'(Rust|러스트)',
+                r'(Swift|스위프트)',
+                r'(Kotlin|코틀린)',
+                r'(Scala|스칼라)',
+                # 프레임워크/라이브러리
+                r'(React|리액트)',
+                r'(Vue|뷰)',
+                r'(Angular|앵귤러)',
+                r'(Node\.js|노드)',
+                r'(Django|장고)',
+                r'(Flask|플라스크)',
+                r'(Spring|스프링)',
+                r'(Express|익스프레스)',
+                r'(Laravel|라라벨)',
+                r'(ASP\.NET|닷넷)',
+                # 데이터베이스
+                r'(MySQL|마이SQL)',
+                r'(PostgreSQL|포스트그레SQL)',
+                r'(MongoDB|몽고DB)',
+                r'(Redis|레디스)',
+                r'(Oracle|오라클)',
+                r'(SQLite|SQLite)',
+                # 클라우드/인프라
+                r'(Docker|도커)',
+                r'(Kubernetes|쿠버네티스|K8s)',
+                r'(AWS|아마존|Amazon)',
+                r'(Azure|애저)',
+                r'(GCP|구글클라우드|Google.?Cloud)',
+                r'(Jenkins|젠킨스)',
+                r'(Git|깃)',
+                r'(GitHub|깃허브)',
+                r'(GitLab|깃랩)',
+                # 디자인 도구
+                r'(Photoshop|포토샵)',
+                r'(Illustrator|일러스트레이터)',
+                r'(Figma|피그마)',
+                r'(Sketch|스케치)',
+                r'(XD|Adobe.?XD)',
+                r'(InDesign|인디자인)',
+                # 오피스 도구
+                r'(Excel|엑셀)',
+                r'(PowerPoint|파워포인트)',
+                r'(Word|워드)',
+                r'(Access|액세스)',
+                r'(Outlook|아웃룩)'
+            ]
+            
+            for pattern in skill_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    skill_name = match.group(1).strip()
+                    if skill_name not in result["skills"]:
+                        result["skills"].append(skill_name)
+                    break 
