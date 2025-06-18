@@ -114,15 +114,20 @@ async def evaluate_resume_v2(resume_data: ResumeData):
         result = evaluation_system.evaluate_resume(resume_data.dict())
         print(f"✅ 평가 완료 (V2): {resume_data.nickname} -> {result.get('totalScore')}점")
         
+        assessment = result.get('assessment', '')
+        keywords = ['totalscore', 'assessment', '실제 조언 내용']
+        if any(keyword in assessment for keyword in keywords):
+            assessment = '조언생성 실패 해당 문제는 추후 해결될 예정입니다'
+
         return {
             "nickname": result["nickname"],
             "totalScore": result['totalScore'],
-            "academicScore": result.get('academicScore', 0.0),
-            "workExperienceScore": result.get('workExperienceScore', 0.0),
-            "certificationScore": result.get('certificationScore', 0.0),
-            "languageProficiencyScore": result.get('languageProficiencyScore', 0.0),
-            "extracurricularScore": result.get('extracurricularScore', 0.0),
-            "assessment": result.get('assessment', '')
+            "academicScore": result.get('academicScore', 0.00),
+            "workExperienceScore": result.get('workExperienceScore', 0.00),
+            "certificationScore": result.get('certificationScore', 0.00),
+            "languageProficiencyScore": result.get('languageProficiencyScore', 0.00),
+            "extracurricularScore": result.get('extracurricularScore', 0.00),
+            "assessment": assessment
         }
     except Exception as e:
         error_msg = f"평가 중 오류 발생: {str(e)}"
