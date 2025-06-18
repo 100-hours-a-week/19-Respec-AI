@@ -4,11 +4,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 import logging
+import os
 from model import OCRModel
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 필요한 디렉토리 생성
+REQUIRED_DIRS = ['static', 'templates']
+for dir_name in REQUIRED_DIRS:
+    if not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+        logger.info(f"Created directory: {dir_name}")
 
 app = FastAPI()
 
@@ -44,4 +52,4 @@ async def analyze_resume(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
