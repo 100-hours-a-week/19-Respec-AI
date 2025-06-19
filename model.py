@@ -644,24 +644,85 @@ class OCRModel:
                         gpa_max = float(match.group(2))
                     break
             
-            # 졸업 상태 확인
+            # 졸업 상태 확인 - 더 정확한 패턴 매칭
             status = "졸업"  # 기본값
             status_keywords = {
-                '졸업': ['졸업', 'graduate', 'completed', '졸업자'],
-                '중퇴': ['중퇴', '중도퇴학', 'dropout', 'withdrawn', '중퇴자'],
-                '수료': ['수료', '수료자', 'coursework', 'completed_course'],
-                '휴학': ['휴학', '휴학중', 'leave', 'suspended', '휴학자'],
-                '재학': ['재학', '재학중', '학생', 'enrolled', 'current', '재학자']
+                '졸업': ['졸업', 'graduate', 'completed', '졸업자', '졸업예정', '졸업생'],
+                '중퇴': ['중퇴', '중도퇴학', 'dropout', 'withdrawn', '중퇴자', '자퇴', '자퇴자'],
+                '수료': ['수료', '수료자', 'coursework', 'completed_course', '수료예정'],
+                '휴학': ['휴학', '휴학중', 'leave', 'suspended', '휴학자', '휴학생'],
+                '재학': ['재학', '재학중', '학생', 'enrolled', 'current', '재학자', '재학생', '학부생', '대학생']
             }
             
+            # 전체 텍스트에서 졸업 상태 키워드 검색
             for status_text, keywords in status_keywords.items():
                 if any(keyword in full_text for keyword in keywords):
                     status = status_text
+                    logger.info(f"졸업 상태 발견: {status_text}")
                     break
             
-            # 중복 확인
+            # 날짜 패턴을 통한 졸업 상태 추정
+            # 졸업일이 있는 경우 졸업으로 판단
+            graduation_date_patterns = [
+                r'([0-9]{4}\.[0-9]{2})',  # 2019.02 형태
+                r'([0-9]{4}-[0-9]{2})',  # 2019-02 형태
+                r'([0-9]{4}년\s*[0-9]{1,2}월)',  # 2019년 2월 형태
+            ]
+            
+            for pattern in graduation_date_patterns:
+                matches = re.findall(pattern, full_text)
+                for match in matches:
+                    # 졸업일이 현재보다 과거인 경우 졸업으로 판단
+                    try:
+                        if '.' in match:
+                            year, month = match.split('.')
+                        elif '-' in match:
+                            year, month = match.split('-')
+                        else:
+                            year_match = re.search(r'([0-9]{4})', match)
+                            if year_match:
+                                year = year_match.group(1)
+                                month = '01'  # 기본값
+                            else:
+                                continue
+                        
+                        graduation_year = int(year)
+                        current_year = datetime.now().year
+                        
+                        # 졸업일이 현재보다 과거이고, 학교명 근처에 있는 경우 졸업으로 판단
+                        if graduation_year < current_year:
+                            # 학교명과 졸업일 사이의 거리 확인
+                            school_index = full_text.find(school_name)
+                            date_index = full_text.find(match)
+                            
+                            if school_index != -1 and date_index != -1:
+                                distance = abs(school_index - date_index)
+                                if distance < 200:  # 200자 이내에 있으면 관련된 것으로 판단
+                                    status = "졸업"
+                                    logger.info(f"졸업일 발견으로 졸업 상태 설정: {match}")
+                                    break
+                    except:
+                        continue
+            
+            # 중복 확인 및 우선순위 처리
             existing_schools = [uni["name"] for uni in result["universities"]]
-            if school_name not in existing_schools:
+            
+            # 중복된 학교명 처리 (예: "수원대학교"와 "수원대학")
+            is_duplicate = False
+            for existing_school in existing_schools:
+                # 한 학교명이 다른 학교명에 포함되는 경우 (예: "수원대학교"와 "수원대학")
+                if school_name in existing_school or existing_school in school_name:
+                    # 더 긴 이름을 우선 (예: "수원대학교" > "수원대학")
+                    if len(school_name) > len(existing_school):
+                        # 기존 항목 제거하고 새로운 항목으로 교체
+                        result["universities"] = [uni for uni in result["universities"] if uni["name"] != existing_school]
+                        is_duplicate = False
+                        break
+                    else:
+                        is_duplicate = True
+                        break
+            
+            if not is_duplicate and school_name not in existing_schools:
                 university_data = {
                     "name": school_name,
                     "degree": degree,
@@ -778,36 +839,73 @@ class OCRModel:
                                     gpa_max = float(match.group(2))
                                 break
                     
-                    # 졸업 상태 확인 (졸업, 중퇴, 수료, 휴학, 재학)
+                    # 졸업 상태 확인 (졸업, 중퇴, 수료, 휴학, 재학) - 더 정확한 패턴 매칭
                     status = "졸업"  # 기본값
                     status_keywords = {
-                        '졸업': ['졸업', 'graduate', 'completed', '졸업자'],
-                        '중퇴': ['중퇴', '중도퇴학', 'dropout', 'withdrawn', '중퇴자'],
-                        '수료': ['수료', '수료자', 'coursework', 'completed_course'],
-                        '휴학': ['휴학', '휴학중', 'leave', 'suspended', '휴학자'],
-                        '재학': ['재학', '재학중', '학생', 'enrolled', 'current', '재학자']
+                        '졸업': ['졸업', 'graduate', 'completed', '졸업자', '졸업예정', '졸업생'],
+                        '중퇴': ['중퇴', '중도퇴학', 'dropout', 'withdrawn', '중퇴자', '자퇴', '자퇴자'],
+                        '수료': ['수료', '수료자', 'coursework', 'completed_course', '수료예정'],
+                        '휴학': ['휴학', '휴학중', 'leave', 'suspended', '휴학자', '휴학생'],
+                        '재학': ['재학', '재학중', '학생', 'enrolled', 'current', '재학자', '재학생', '학부생', '대학생']
                     }
                     
+                    # 현재 라인에서 졸업 상태 키워드 검색
                     for status_text, keywords in status_keywords.items():
                         if any(keyword in line for keyword in keywords):
                             status = status_text
+                            logger.info(f"라인에서 졸업 상태 발견: {status_text}")
                             break
                     
-                    # 중복 확인
-                    existing_schools = [uni["name"] for uni in result["universities"]]
-                    if school_name not in existing_schools:
-                        university_data = {
-                            "name": school_name,
-                            "degree": degree,
-                            "major": major,
-                            "status": status,  # 졸업 상태 추가
-                            "gpa": gpa,
-                            "gpa_max": gpa_max
-                        }
-                        
-                        result["universities"].append(university_data)
-                        logger.info(f"학력 정보 추출: {school_name} - {degree} - {major} - {status} - GPA: {gpa}/{gpa_max}")
-                    break
+                    # 다음 라인에서도 졸업 상태 키워드 검색
+                    if status == "졸업" and i + 1 < len(lines):
+                        next_line = lines[i + 1].strip()
+                        for status_text, keywords in status_keywords.items():
+                            if any(keyword in next_line for keyword in keywords):
+                                status = status_text
+                                logger.info(f"다음 라인에서 졸업 상태 발견: {status_text}")
+                                break
+                    
+                    # 날짜 패턴을 통한 졸업 상태 추정
+                    graduation_date_patterns = [
+                        r'([0-9]{4}\.[0-9]{2})',  # 2019.02 형태
+                        r'([0-9]{4}-[0-9]{2})',  # 2019-02 형태
+                        r'([0-9]{4}년\s*[0-9]{1,2}월)',  # 2019년 2월 형태
+                    ]
+                    
+                    for pattern in graduation_date_patterns:
+                        matches = re.findall(pattern, line)
+                        for match in matches:
+                            # 졸업일이 현재보다 과거인 경우 졸업으로 판단
+                            try:
+                                if '.' in match:
+                                    year, month = match.split('.')
+                                elif '-' in match:
+                                    year, month = match.split('-')
+                                else:
+                                    year_match = re.search(r'([0-9]{4})', match)
+                                    if year_match:
+                                        year = year_match.group(1)
+                                        month = '01'  # 기본값
+                                    else:
+                                        continue
+                                
+                                graduation_year = int(year)
+                                current_year = datetime.now().year
+                                
+                                # 졸업일이 현재보다 과거인 경우 졸업으로 판단
+                                if graduation_year < current_year:
+                                    status = "졸업"
+                                    logger.info(f"라인에서 졸업일 발견으로 졸업 상태 설정: {match}")
+                                    break
+                            except:
+                                continue
+        
+        # 마지막 경력 추가
+        if current_career:
+            # 직무가 없으면 기본값으로 정규직 설정
+            if not current_career["role"]:
+                current_career["role"] = "정규직"
+            result["careers"].append(current_career)
 
     def extract_career_direct(self, lines: List[str], result: Dict):
         """직접적 경력 정보 추출"""
