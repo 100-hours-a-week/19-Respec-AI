@@ -899,13 +899,24 @@ class OCRModel:
                                     break
                             except:
                                 continue
+                    
+                    # 중복 확인
+                    existing_schools = [uni["name"] for uni in result["universities"]]
+                    if school_name not in existing_schools:
+                        university_data = {
+                            "name": school_name,
+                            "degree": degree,
+                            "major": major,
+                            "status": status,  # 졸업 상태 추가
+                            "gpa": gpa,
+                            "gpa_max": gpa_max
+                        }
+                        
+                        result["universities"].append(university_data)
+                        logger.info(f"학력 정보 추출: {school_name} - {degree} - {major} - {status} - GPA: {gpa}/{gpa_max}")
+                    break
         
-        # 마지막 경력 추가
-        if current_career:
-            # 직무가 없으면 기본값으로 정규직 설정
-            if not current_career["role"]:
-                current_career["role"] = "정규직"
-            result["careers"].append(current_career)
+        # 여기서 바로 다음 함수(def extract_career_direct...)로 넘어가야 합니다.
 
     def extract_career_direct(self, lines: List[str], result: Dict):
         """직접적 경력 정보 추출"""
