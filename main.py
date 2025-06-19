@@ -76,11 +76,12 @@ async def analyze_resume_from_url(request: S3URLRequest):
         # 대학교 정보 변환
         for uni in structured_data.get("universities", []):
             university_info = {
-                "school_name": uni.get("name", ""),
+                "name": uni.get("name", ""),
                 "degree": uni.get("degree", ""),
                 "major": uni.get("major", ""),
-                "gpa": 0.0,  # 추후 구현
-                "gpa_max": 4.5  # 추후 구현
+                "status": uni.get("status", ""),
+                "gpa": uni.get("gpa", 0.0),
+                "gpa_max": uni.get("gpa_max", 4.5)
             }
             response_data["universities"].append(university_info)
         
