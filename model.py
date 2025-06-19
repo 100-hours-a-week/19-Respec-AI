@@ -406,24 +406,94 @@ class OCRModel:
             gpa = 0.0
             gpa_max = 4.5
             
+            # 학점 추출 패턴들 (더 포괄적으로)
             gpa_patterns = [
+                # 기본 GPA 패턴
                 r'GPA\s*:\s*([0-9.]+)',
                 r'학점\s*:\s*([0-9.]+)',
                 r'평점\s*:\s*([0-9.]+)',
-                r'([0-9.]+)\s*\/\s*([0-9.]+)',  # "3.5/4.5" 형태
-                r'([0-9.]+)\s*점',  # "3.5점" 형태
-                r'([0-9.]+)\s*\/\s*([0-9.]+)\s*점'  # "3.5/4.5점" 형태
+                r'성적\s*:\s*([0-9.]+)',
+                
+                # 분수 형태 (3.5/4.5, 3.8/4.3 등)
+                r'([0-9.]+)\s*\/\s*([0-9.]+)',
+                r'([0-9.]+)\s*\/\s*([0-9.]+)\s*점',
+                r'([0-9.]+)\s*\/\s*([0-9.]+)\s*\(만점\)',
+                
+                # 점수 형태 (3.5점, 3.8점 등)
+                r'([0-9.]+)\s*점',
+                r'([0-9.]+)\s*\(만점\s*([0-9.]+)\)',
+                
+                # 괄호 형태 (3.5 (4.5만점))
+                r'([0-9.]+)\s*\(([0-9.]+)\s*만점\)',
+                r'([0-9.]+)\s*\(만점\s*([0-9.]+)\)',
+                
+                # 콜론 형태 (학점: 3.5/4.5)
+                r'학점\s*:\s*([0-9.]+)\s*\/\s*([0-9.]+)',
+                r'평점\s*:\s*([0-9.]+)\s*\/\s*([0-9.]+)',
+                r'GPA\s*:\s*([0-9.]+)\s*\/\s*([0-9.]+)',
             ]
             
+            # 만점만 따로 추출하는 패턴들
+            max_score_patterns = [
+                r'만점\s*([0-9.]+)',
+                r'\(만점\s*([0-9.]+)\)',
+                r'([0-9.]+)\s*만점',
+                r'최고점\s*([0-9.]+)',
+                r'최대점수\s*([0-9.]+)'
+            ]
+            
+            # 먼저 만점만 추출
+            for pattern in max_score_patterns:
+                match = re.search(pattern, full_text)
+                if match:
+                    potential_max = float(match.group(1))
+                    # 일반적인 만점 값들만 허용 (4.0, 4.3, 4.5)
+                    if potential_max in [4.0, 4.3, 4.5]:
+                        gpa_max = potential_max
+                        logger.info(f"만점 추출: {gpa_max}")
+                        break
+            
+            # 학점 추출
             for pattern in gpa_patterns:
                 match = re.search(pattern, full_text)
                 if match:
                     if len(match.groups()) == 1:
-                        gpa = float(match.group(1))
+                        potential_gpa = float(match.group(1))
+                        # 학점 유효성 검사 (0.0 ~ 4.5 범위, 날짜 형태 제외)
+                        if self.is_valid_gpa(potential_gpa):
+                            gpa = potential_gpa
+                            # 만점이 아직 설정되지 않았다면 기본값 4.5 사용
+                            if gpa_max == 4.5:
+                                logger.info(f"학점 추출: {gpa}/{gpa_max} (기본 만점)")
+                            else:
+                                logger.info(f"학점 추출: {gpa}/{gpa_max}")
                     elif len(match.groups()) == 2:
-                        gpa = float(match.group(1))
-                        gpa_max = float(match.group(2))
+                        potential_gpa = float(match.group(1))
+                        potential_max = float(match.group(2))
+                        
+                        # 학점과 만점 모두 유효성 검사
+                        if self.is_valid_gpa(potential_gpa) and potential_max in [4.0, 4.3, 4.5]:
+                            gpa = potential_gpa
+                            gpa_max = potential_max
+                            logger.info(f"학점 추출: {gpa}/{gpa_max}")
                     break
+            
+            # 학점이 추출되었지만 만점이 기본값인 경우, 텍스트에서 만점 정보 재검색
+            if gpa > 0 and gpa_max == 4.5:
+                # 더 넓은 범위에서 만점 검색
+                for pattern in max_score_patterns:
+                    match = re.search(pattern, full_text)
+                    if match:
+                        potential_max = float(match.group(1))
+                        if potential_max in [4.0, 4.3, 4.5]:
+                            gpa_max = potential_max
+                            logger.info(f"추가 만점 검색 결과: {gpa_max}")
+                            break
+            
+            # 학점이 유효하지 않으면 0으로 설정 (나중에 "-"로 표시)
+            if not self.is_valid_gpa(gpa):
+                gpa = 0.0
+                logger.info("유효하지 않은 학점 값으로 인해 0으로 설정")
             
             # 졸업 상태 확인 - 더 정확한 패턴 매칭
             status = "졸업"  # 기본값
@@ -1210,3 +1280,7 @@ class OCRModel:
                     lang["test"] = "HSK"
                 elif "한국어능력시험" in test_name:
                     lang["test"] = "TOPIK"
+
+    def is_valid_gpa(self, gpa: float) -> bool:
+        """학점 유효성 검사"""
+        return 0.0 <= gpa <= 4.5

@@ -180,6 +180,8 @@
                     html += `<strong>전공:</strong> ${uni.major || '-'}<br>`;
                     if (uni.gpa && uni.gpa > 0) {
                         html += `<strong>학점:</strong> ${uni.gpa}/${uni.gpa_max || 4.5}`;
+                    } else {
+                        html += `<strong>학점:</strong> -`;
                     }
                     html += '</div>';
                     if (index < data.universities.length - 1) {
