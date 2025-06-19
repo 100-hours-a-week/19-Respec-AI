@@ -277,6 +277,29 @@ class OCRModel:
                 r'^성명\s*:\s*[가-힣]{2,4}$',  # "성명: 홍길동"
                 r'^닉네임\s*:\s*[가-힣a-zA-Z0-9]{2,10}$',  # "닉네임: nickname"
                 r'^별명\s*:\s*[가-힣a-zA-Z0-9]{2,10}$',  # "별명: nickname"
+                
+                # 개인 식별 정보 (학력 정보는 유지)
+                r'^[0-9]{8}만[0-9]{1,2}세$',  # "19961115만26세"
+                r'^[0-9]{4}년\s*[0-9]{1,2}월\s*[0-9]{1,2}일$',  # "1996년 11월 15일"
+                r'^[0-9]{4}-[0-9]{2}-[0-9]{2}$',  # "1996-11-15"
+                r'^만\s*[0-9]{1,2}세$',  # "만 26세"
+                r'^[0-9]{1,2}세$',  # "26세"
+                
+                # 연락처 정보
+                r'^[0-9]{3}-[0-9]{4}-[0-9]{4}$',  # "010-1234-5678"
+                r'^[0-9]{11}$',  # "01012345678"
+                r'^[0-9]{2,3}-[0-9]{3,4}-[0-9]{4}$',  # 전화번호 패턴
+                
+                # 주소 정보 (개인 주소)
+                r'^[가-힣\s]+시[가-힣\s]+구[가-힣\s]+동[0-9-]+$',  # "수원시영통구영통로100한빛아파트101동1000호"
+                r'^[가-힣\s]+아파트[0-9-]+동[0-9-]+호$',  # "한빛아파트101동1000호"
+                
+                # 섹션 제목 (개인정보 관련)
+                r'^기본사항$',  # "기본사항"
+                r'^개인정보$',  # "개인정보"
+                r'^인적사항$',  # "인적사항"
+                r'^Personal\s*Information$',  # "Personal Information"
+                r'^Persoona1\s*1nformation$',  # OCR 오타 포함
             ]
             
             for pattern in personal_info_patterns:
@@ -536,12 +559,20 @@ class OCRModel:
         full_text = " ".join(lines)
         logger.info(f"전체 텍스트에서 학력 검색: {full_text[:200]}...")
         
-        # 대학교 패턴 검색 (전체 텍스트에서)
+        # 대학교 패턴 검색 (전체 텍스트에서) - 더 포괄적인 패턴 추가
         university_patterns = [
             r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지|college|university))',
             r'([가-힣a-zA-Z\s]+(?:대학교|대학))',
             r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학))',
-            r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지))'
+            r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지))',
+            # 더 구체적인 패턴 추가
+            r'([가-힣]+대학교)',
+            r'([가-힣]+대학)',
+            r'([가-힣]+전문대학)',
+            r'([가-힣]+컬리지)',
+            # 영문 패턴
+            r'([a-zA-Z\s]+(?:University|College|Institute))',
+            r'([a-zA-Z\s]+(?:Univ|Coll|Inst))'
         ]
         
         found_universities = []
@@ -550,8 +581,10 @@ class OCRModel:
             for match in matches:
                 school_name = match.strip()
                 if school_name and school_name not in found_universities:
-                    found_universities.append(school_name)
-                    logger.info(f"대학교 발견: {school_name}")
+                    # 고등학교 제외
+                    if '고등학교' not in school_name and '고등' not in school_name:
+                        found_universities.append(school_name)
+                        logger.info(f"대학교 발견: {school_name}")
         
         # 각 대학교에 대해 정보 추출
         for school_name in found_universities:
@@ -564,11 +597,14 @@ class OCRModel:
             elif any(keyword in full_text for keyword in ['전문학사', 'associate', 'Associate']):
                 degree = "전문학사"
             
-            # 전공 확인
+            # 전공 확인 - 더 정확한 패턴 매칭
             major = ""
             major_patterns = [
                 r'([가-힣a-zA-Z\s]+(?:학과|전공))',
-                r'([가-힣a-zA-Z\s]+(?:학과|전공))\s*[ㅣ|]\s*[가-힣]+'  # "경영학과 ㅣ수원" 형태
+                r'([가-힣a-zA-Z\s]+(?:학과|전공))\s*[ㅣ|]\s*[가-힣]+',  # "경영학과 ㅣ수원" 형태
+                r'([가-힣]+학과)',  # 더 구체적인 패턴
+                r'([가-힣]+전공)',
+                r'([a-zA-Z\s]+(?:Major|Department))'
             ]
             
             for pattern in major_patterns:
@@ -579,8 +615,11 @@ class OCRModel:
                     major = re.sub(r'^[가-힣]{2,4}\s+', '', major)
                     # 숫자 제거
                     major = re.sub(r'\s*\d+\s*$', '', major)
+                    # 특수문자 제거
+                    major = re.sub(r'[ㅣ|]', '', major)
                     major = major.strip()
-                    break
+                    if major:  # 빈 문자열이 아닌 경우만 사용
+                        break
             
             # 학점(GPA) 추출
             gpa = 0.0
@@ -635,24 +674,36 @@ class OCRModel:
                 result["universities"].append(university_data)
                 logger.info(f"학력 정보 추출: {school_name} - {degree} - {major} - {status} - GPA: {gpa}/{gpa_max}")
         
-        # 기존 라인별 추출 로직도 유지
+        # 기존 라인별 추출 로직도 유지 (더 강화된 버전)
         for i, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
             
-            # 학교명 추출 (고등학교 제외, 대학교/대학/전문대학만)
+            # 학교명 추출 (고등학교 제외, 대학교/대학/전문대학만) - 더 포괄적인 패턴
             school_patterns = [
                 r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지|college|university))',
                 r'([가-힣a-zA-Z\s]+(?:대학교|대학))',
                 r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학))',
-                r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지))'
+                r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지))',
+                # 더 구체적인 패턴 추가
+                r'([가-힣]+대학교)',
+                r'([가-힣]+대학)',
+                r'([가-힣]+전문대학)',
+                r'([가-힣]+컬리지)',
+                # 영문 패턴
+                r'([a-zA-Z\s]+(?:University|College|Institute))',
+                r'([a-zA-Z\s]+(?:Univ|Coll|Inst))'
             ]
             
             for pattern in school_patterns:
                 match = re.search(pattern, line)
                 if match:
                     school_name = match.group(1).strip()
+                    
+                    # 고등학교 제외
+                    if '고등학교' in school_name or '고등' in school_name:
+                        continue
                     
                     # 학위 확인
                     degree = "학사"
@@ -663,7 +714,7 @@ class OCRModel:
                     elif any(keyword in line for keyword in ['전문학사', 'associate', 'Associate']):
                         degree = "전문학사"
                     
-                    # 전공 확인
+                    # 전공 확인 - 더 정확한 패턴 매칭
                     major = ""
                     if "학과" in line or "전공" in line:
                         # 학과/전공 패턴 찾기
@@ -675,6 +726,8 @@ class OCRModel:
                             major = re.sub(r'^[가-힣]{2,4}\s+', '', major)
                             # 숫자 제거 (예: "경영학과 02" -> "경영학과")
                             major = re.sub(r'\s*\d+\s*$', '', major)
+                            # 특수문자 제거
+                            major = re.sub(r'[ㅣ|]', '', major)
                             major = major.strip()
                     elif i + 1 < len(lines):
                         next_line = lines[i + 1].strip()
@@ -684,6 +737,8 @@ class OCRModel:
                             major = re.sub(r'^[가-힣]{2,4}\s+', '', major)
                             # 숫자 제거 (예: "경영학과 02" -> "경영학과")
                             major = re.sub(r'\s*\d+\s*$', '', major)
+                            # 특수문자 제거
+                            major = re.sub(r'[ㅣ|]', '', major)
                             major = major.strip()
                     
                     # 학점(GPA) 추출
