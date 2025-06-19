@@ -151,30 +151,56 @@
         function formatStructuredData(data) {
             let html = '<div class="resume-data">';
             
-            // 대학교 정보
-            if (data.universities && data.universities.length > 0) {
+            // 최종학력 정보
+            if (data.final_edu && data.final_edu !== "") {
                 html += '<div class="section"><h4>최종학력</h4>';
-                data.universities.forEach(uni => {
+                html += `<div class="item">`;
+                html += `<strong>최종학력:</strong> ${data.final_edu}<br>`;
+                if (data.final_status) {
+                    html += `<strong>졸업상태:</strong> ${data.final_status}`;
+                }
+                html += '</div></div>';
+            }
+            
+            // 희망직종
+            if (data.desired_job && data.desired_job !== "") {
+                html += '<div class="section"><h4>희망직종</h4>';
+                html += `<div class="item">`;
+                html += `<strong>희망직종:</strong> ${data.desired_job}`;
+                html += '</div></div>';
+            }
+            
+            // 학력 상세
+            if (data.universities && data.universities.length > 0) {
+                html += '<div class="section"><h4>학력</h4>';
+                data.universities.forEach((uni, index) => {
                     html += `<div class="item">`;
-                    html += `<strong>학교:</strong> ${uni.name || '-'}<br>`;
+                    html += `<strong>학교:</strong> ${uni.school_name || '-'}<br>`;
                     html += `<strong>학위:</strong> ${uni.degree || '-'}<br>`;
                     html += `<strong>전공:</strong> ${uni.major || '-'}<br>`;
-                    html += `<strong>졸업상태:</strong> ${uni.status || '-'}<br>`;
-                    html += `<strong>학점:</strong> ${uni.gpa || '-'}/${uni.gpa_max || '-'}`;
+                    if (uni.gpa && uni.gpa > 0) {
+                        html += `<strong>학점:</strong> ${uni.gpa}/${uni.gpa_max || 4.5}`;
+                    }
                     html += '</div>';
+                    if (index < data.universities.length - 1) {
+                        html += '<hr>';
+                    }
                 });
                 html += '</div>';
             }
             
-            // 경력 정보
+            // 경력
             if (data.careers && data.careers.length > 0) {
                 html += '<div class="section"><h4>경력</h4>';
-                data.careers.forEach(career => {
+                data.careers.forEach((career, index) => {
                     html += `<div class="item">`;
                     html += `<strong>회사:</strong> ${career.company || '-'}<br>`;
                     html += `<strong>직무:</strong> ${career.role || '-'}<br>`;
-                    html += `<strong>근무기간:</strong> ${career.work_month || '-'}개월`;
+                    html += `<strong>근무기간:</strong> ${career.work_month || 0}개월`;
                     html += '</div>';
+                    if (index < data.careers.length - 1) {
+                        html += '<hr>';
+                    }
                 });
                 html += '</div>';
             }
@@ -182,21 +208,32 @@
             // 자격증
             if (data.certificates && data.certificates.length > 0) {
                 html += '<div class="section"><h4>자격증</h4>';
-                html += '<div class="item">';
-                data.certificates.forEach(cert => {
-                    html += `<span class="cert">${cert}</span> `;
+                html += `<div class="item">`;
+                data.certificates.forEach((cert, index) => {
+                    html += cert;
+                    if (index < data.certificates.length - 1) {
+                        html += ', ';
+                    }
                 });
                 html += '</div></div>';
             }
             
-            // 언어
+            // 어학능력
             html += '<div class="section"><h4>어학능력</h4>';
             if (data.languages && data.languages.length > 0) {
-                data.languages.forEach(lang => {
+                data.languages.forEach((lang, index) => {
                     html += `<div class="item">`;
-                    html += `<strong>시험:</strong> ${lang.test || '-'}<br>`;
-                    html += `<strong>점수/등급:</strong> ${lang.score_or_grade || '-'}`;
+                    if (lang.test) {
+                        html += `<strong>시험:</strong> ${lang.test}`;
+                    }
+                    if (lang.score_or_grade) {
+                        if (lang.test) html += '<br>';
+                        html += `<strong>점수/등급:</strong> ${lang.score_or_grade}`;
+                    }
                     html += '</div>';
+                    if (index < data.languages.length - 1) {
+                        html += '<hr>';
+                    }
                 });
             } else {
                 html += '<div class="item">어학능력 정보가 없습니다.</div>';
@@ -206,12 +243,15 @@
             // 활동
             if (data.activities && data.activities.length > 0) {
                 html += '<div class="section"><h4>활동</h4>';
-                data.activities.forEach(activity => {
+                data.activities.forEach((activity, index) => {
                     html += `<div class="item">`;
-                    html += `<strong>활동명:</strong> ${activity.name || '-'}<br>`;
-                    html += `<strong>역할:</strong> ${activity.role || '-'}<br>`;
-                    html += `<strong>수상:</strong> ${activity.award || '-'}`;
+                    html += `<strong>활동명:</strong> ${activity.name || '-'}`;
+                    html += `<br><strong>역할:</strong> ${activity.role || ''}`;
+                    html += `<br><strong>수상:</strong> ${activity.award || ''}`;
                     html += '</div>';
+                    if (index < data.activities.length - 1) {
+                        html += '<hr>';
+                    }
                 });
                 html += '</div>';
             }
