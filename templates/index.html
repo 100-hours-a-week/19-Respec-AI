@@ -136,7 +136,7 @@
         <div class="error" id="error"></div>
 
         <div class="result-section" id="result" style="display: none;">
-            <h3>📄 이력서 분석 결과:</h3>
+            <h3>이력서 분석 결과:</h3>
             <div id="extractedText"></div>
         </div>
     </div>
@@ -153,12 +153,13 @@
             
             // 대학교 정보
             if (data.universities && data.universities.length > 0) {
-                html += '<div class="section"><h4>🎓 학력</h4>';
+                html += '<div class="section"><h4>최종학력</h4>';
                 data.universities.forEach(uni => {
                     html += `<div class="item">`;
-                    html += `<strong>학교:</strong> ${uni.school_name || '-'}<br>`;
+                    html += `<strong>학교:</strong> ${uni.name || '-'}<br>`;
                     html += `<strong>학위:</strong> ${uni.degree || '-'}<br>`;
                     html += `<strong>전공:</strong> ${uni.major || '-'}<br>`;
+                    html += `<strong>졸업상태:</strong> ${uni.status || '-'}<br>`;
                     html += `<strong>학점:</strong> ${uni.gpa || '-'}/${uni.gpa_max || '-'}`;
                     html += '</div>';
                 });
@@ -167,7 +168,7 @@
             
             // 경력 정보
             if (data.careers && data.careers.length > 0) {
-                html += '<div class="section"><h4>💼 경력</h4>';
+                html += '<div class="section"><h4>경력</h4>';
                 data.careers.forEach(career => {
                     html += `<div class="item">`;
                     html += `<strong>회사:</strong> ${career.company || '-'}<br>`;
@@ -189,16 +190,18 @@
             }
             
             // 언어
+            html += '<div class="section"><h4>어학능력</h4>';
             if (data.languages && data.languages.length > 0) {
-                html += '<div class="section"><h4>어학</h4>';
                 data.languages.forEach(lang => {
                     html += `<div class="item">`;
                     html += `<strong>시험:</strong> ${lang.test || '-'}<br>`;
-                    html += `<strong>점수:</strong> ${lang.score_or_grade || '-'}`;
+                    html += `<strong>점수/등급:</strong> ${lang.score_or_grade || '-'}`;
                     html += '</div>';
                 });
-                html += '</div>';
+            } else {
+                html += '<div class="item">어학능력 정보가 없습니다.</div>';
             }
+            html += '</div>';
             
             // 활동
             if (data.activities && data.activities.length > 0) {
