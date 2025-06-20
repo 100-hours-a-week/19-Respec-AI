@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>이력서 OCR - S3 URL</title>
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .url-section {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .url-input {
+            width: 80%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            margin: 10px 0;
+        }
+        .upload-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+            margin: 5px;
+        }
+        .upload-btn:hover {
+            background-color: #45a049;
+        }
+        .result-section {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #fff;
+            white-space: pre-wrap;
+            font-size: 14px;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .error {
+            color: red;
+            text-align: center;
+            margin: 10px 0;
+            display: none;
+        }
+        .info-box {
+            background-color: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        .resume-data {
+            text-align: left;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            background-color: #fafafa;
+        }
+        .section h4 {
+            margin: 0 0 10px 0;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 5px;
+        }
+        .item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: white;
+            border-radius: 3px;
+            border-left: 3px solid #4CAF50;
+        }
+        .cert {
+            display: inline-block;
+            background-color: #e8f5e8;
+            padding: 4px 8px;
+            margin: 2px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>이력서 OCR - S3 URL</h1>
+        
+        
+
+        <div class="url-section">
+            <input type="text" id="s3Url" class="url-input" placeholder="S3 URL을 입력하세요 (예: https://bucket.s3.amazonaws.com/file.pdf)">
+            <br>
+            <button class="upload-btn" onclick="processS3Url()">이력서 분석 시작</button>
+        </div>
+
+        <div class="loading" id="loading">
+            처리 중... 잠시만 기다려주세요.
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="result-section" id="result" style="display: none;">
+            <h3>이력서 분석 결과:</h3>
+            <div id="extractedText"></div>
+        </div>
+    </div>
+
+    <script>
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const result = document.getElementById('result');
+        const extractedText = document.getElementById('extractedText');
+        const s3UrlInput = document.getElementById('s3Url');
+
+        function formatStructuredData(data) {
+            let html = '<div class="resume-data">';
+            
+            // 최종학력 정보
+            if (data.final_edu && data.final_edu !== "") {
+                html += '<div class="section"><h4>최종학력</h4>';
+                html += `<div class="item">`;
+                html += `<strong>최종학력:</strong> ${data.final_edu}<br>`;
+                if (data.final_status) {
+                    html += `<strong>졸업상태:</strong> ${data.final_status}`;
+                }
+                html += '</div></div>';
+            }
+            
+            // 희망직종
+            if (data.desired_job && data.desired_job !== "") {
+                html += '<div class="section"><h4>희망직종</h4>';
+                html += `<div class="item">`;
+                html += `<strong>희망직종:</strong> ${data.desired_job}`;
+                html += '</div></div>';
+            }
+            
+            // 학력 상세
+            if (data.universities && data.universities.length > 0) {
+                html += '<div class="section"><h4>학력</h4>';
+                data.universities.forEach((uni, index) => {
+                    html += `<div class="item">`;
+                    html += `<strong>학교:</strong> ${uni.school_name || '-'}<br>`;
+                    html += `<strong>학위:</strong> ${uni.degree || '-'}<br>`;
+                    html += `<strong>전공:</strong> ${uni.major || '-'}<br>`;
+                    if (uni.gpa && uni.gpa > 0) {
+                        html += `<strong>학점:</strong> ${uni.gpa}/${uni.gpa_max || 4.5}`;
+                    } else {
+                        html += `<strong>학점:</strong> -`;
+                    }
+                    html += '</div>';
+                    if (index < data.universities.length - 1) {
+                        html += '<hr>';
+                    }
+                });
+                html += '</div>';
+            }
+            
+            // 경력
+            if (data.careers && data.careers.length > 0) {
+                html += '<div class="section"><h4>경력</h4>';
+                data.careers.forEach((career, index) => {
+                    html += `<div class="item">`;
+                    html += `<strong>회사:</strong> ${career.company || '-'}<br>`;
+                    html += `<strong>직무:</strong> ${career.role || '-'}<br>`;
+                    html += `<strong>근무기간:</strong> ${career.work_month || 0}개월`;
+                    html += '</div>';
+                    if (index < data.careers.length - 1) {
+                        html += '<hr>';
+                    }
+                });
+                html += '</div>';
+            }
+            
+            // 자격증
+            if (data.certificates && data.certificates.length > 0) {
+                html += '<div class="section"><h4>자격증</h4>';
+                html += `<div class="item">`;
+                data.certificates.forEach((cert, index) => {
+                    html += cert;
+                    if (index < data.certificates.length - 1) {
+                        html += ', ';
+                    }
+                });
+                html += '</div></div>';
+            }
+            
+            // 어학능력
+            html += '<div class="section"><h4>어학능력</h4>';
+            if (data.languages && data.languages.length > 0) {
+                data.languages.forEach((lang, index) => {
+                    html += `<div class="item">`;
+                    if (lang.test) {
+                        html += `<strong>시험:</strong> ${lang.test}`;
+                    }
+                    if (lang.score_or_grade) {
+                        if (lang.test) html += '<br>';
+                        html += `<strong>점수/등급:</strong> ${lang.score_or_grade}`;
+                    }
+                    html += '</div>';
+                    if (index < data.languages.length - 1) {
+                        html += '<hr>';
+                    }
+                });
+            } else {
+                html += '<div class="item">어학능력 정보가 없습니다.</div>';
+            }
+            html += '</div>';
+            
+            // 활동
+            if (data.activities && data.activities.length > 0) {
+                html += '<div class="section"><h4>활동</h4>';
+                data.activities.forEach((activity, index) => {
+                    html += `<div class="item">`;
+                    html += `<strong>활동명:</strong> ${activity.name || '-'}`;
+                    html += `<br><strong>역할:</strong> ${activity.role || ''}`;
+                    html += `<br><strong>수상:</strong> ${activity.award || ''}`;
+                    html += '</div>';
+                    if (index < data.activities.length - 1) {
+                        html += '<hr>';
+                    }
+                });
+                html += '</div>';
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        async function processS3Url() {
+            const s3Url = s3UrlInput.value.trim();
+            if (!s3Url) {
+                error.textContent = 'S3 URL을 입력해주세요.';
+                error.style.display = 'block';
+                return;
+            }
+
+            // URL 형식 검증
+            if (!s3Url.startsWith('http://') && !s3Url.startsWith('https://')) {
+                error.textContent = '올바른 URL 형식을 입력해주세요.';
+                error.style.display = 'block';
+                return;
+            }
+
+            // UI 초기화
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            result.style.display = 'none';
+
+            try {
+                const response = await fetch('/ocrspec', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ filelink: s3Url }),
+                    signal: AbortSignal.timeout(300000) // 5분 타임아웃
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'S3 URL 처리 중 오류가 발생했습니다.');
+                }
+
+                const data = await response.json();
+                
+                // 구조화된 데이터 표시
+                extractedText.innerHTML = formatStructuredData(data);
+                result.style.display = 'block';
+            } catch (err) {
+                error.textContent = err.message;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        // Enter 키로도 처리 가능하도록
+        s3UrlInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                processS3Url();
+            }
+        });
+    </script>
+</body>
+</html> 
