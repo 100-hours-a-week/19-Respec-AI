@@ -1,20 +1,20 @@
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse,JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-import uvicorn
-import logging
-import os
 import time
 import re
-from typing import Optional, Dict, Any
-from urllib.parse import urlparse
+from pydantic import BaseModel, Field, validator, field_validator
+import os
+import uvicorn
 import requests
+from urllib.parse import urlparse
+from resume_evaluation_system import ResumeEvaluationSystem
 from model import OCRModel
-from pydantic import BaseModel, validator
-
+import logging
 
 # 로깅 설정 개선
 logging.basicConfig(
@@ -23,38 +23,92 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 # 필요한 디렉토리 생성
-REQUIRED_DIRS = ['static', 'templates', 'temp']
+REQUIRED_DIRS = ['static', 'templates']
 for dir_name in REQUIRED_DIRS:
     if not os.path.exists(dir_name):
         os.makedirs(dir_name)
         logger.info(f"Created directory: {dir_name}")
 
-app = FastAPI(
-    title="이력서 분석 API",
-    description="URL 기반 이력서 PDF 분석 및 구조화 서비스",
-    version="2.0.0"
+# FastAPI 애플리케이션 인스턴스 생성
+app = FastAPI(title="Spec Score API")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="/templates")
+
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# 정적 파일 및 템플릿 폴더 설정
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# 평가 시스템 초기화
+evaluation_system = ResumeEvaluationSystem()
 
-# OCR 모델 초기화 (싱글톤 패턴)
-ocr_model = None
-
+# OCR 모델 초기화
+ocr_model = OCRModel()
 def get_ocr_model():
     global ocr_model
     if ocr_model is None:
         ocr_model = OCRModel()
     return ocr_model
 
-# Pydantic 모델 개선
+# ──────────────────────────
+# Pydantic 모델 정의
+# ──────────────────────────
+class University(BaseModel):
+    school_name: str
+    degree: Optional[str] = None
+    major: Optional[str] = None
+    gpa: Optional[float] = None
+    gpa_max: Optional[float] = None
+
+class Career(BaseModel):
+    company: str
+    role: Optional[str] = None
+    work_month: Optional[int] = None
+
+class Language(BaseModel):
+    test: str
+    score_or_grade: str
+
+class Activity(BaseModel):
+    name: str
+    role: Optional[str] = None
+    award: Optional[str] = None
+
+class ResumeData(BaseModel):
+    nickname: str
+    final_edu: str
+    final_status: str
+    desired_job: str
+    universities: Optional[List[University]] = []
+    careers: Optional[List[Career]] = []
+    certificates: Optional[List[str]] = []
+    languages: Optional[List[Language]] = []
+    activities: Optional[List[Activity]] = []
+
+class ResumeScore(BaseModel):
+    nickname: str
+    academicScore: float
+    workExperienceScore: float
+    certificationScore: float
+    languageProficiencyScore: float
+    extracurricularScore: float
+    totalScore: float
+    assessment: str
+
+class ErrorResponse(BaseModel):
+    message: str
+
+# S3 URL 요청을 위한 새로운 모델
 class S3URLRequest(BaseModel):
-    filelink: str = ""
+    filelink: str = Field(..., description="S3에 저장된 PDF 파일의 URL")
     
-    @validator('filelink')
+    @field_validator('filelink')
     def validate_filelink(cls, v):
         if not v or not v.strip():
             raise ValueError("URL이 비어있습니다.")
@@ -74,15 +128,53 @@ class S3URLRequest(BaseModel):
             raise ValueError("PDF 파일만 지원됩니다.")
         
         return url
-
-# 응답 모델 정의
+    
 class ResumeAnalysisResponse(BaseModel):
     success: bool = True
     message: str = "분석이 완료되었습니다."
     processing_time: float = 0.0
     data: Dict[str, Any] = {}
+# ──────────────────────────
+# 유틸리티 함수
+# ──────────────────────────
+def is_valid_url(url: str) -> bool:
+    """URL 유효성 검증"""
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
 
-@app.get("/", response_class=HTMLResponse)
+def is_pdf_url(url: str) -> bool:
+    """PDF URL인지 확인"""
+    return url.lower().endswith('.pdf') or 'pdf' in url.lower()
+
+async def download_pdf_from_url(url: str) -> bytes:
+    """URL에서 PDF 파일 다운로드"""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        
+        # Content-Type 확인
+        content_type = response.headers.get('content-type', '').lower()
+        if 'pdf' not in content_type and not is_pdf_url(url):
+            raise HTTPException(status_code=400, detail="PDF 파일이 아닙니다.")
+        
+        return response.content
+    except requests.RequestException as e:
+        logger.error(f"PDF 다운로드 실패: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"PDF 다운로드 실패: {str(e)}")
+
+# ──────────────────────────
+# 라우트 정의
+# ──────────────────────────
+@app.get("/yuju/dev", response_class=HTMLResponse)
+async def get_test_page(request: Request):
+    with open("./templates/spec_test.html", "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
+
+@app.get("/jenna/dev", response_class=HTMLResponse)
 async def read_root(request: Request):
     """메인 페이지"""
     return templates.TemplateResponse("index.html", {"request": request})
@@ -92,7 +184,6 @@ async def analyze_resume_from_url(request: S3URLRequest):
     """이력서 PDF 분석 (URL 기반) - 개선된 버전"""
     start_time = time.time()
     
-
     try:
         logger.info(f"=== 이력서 분석 시작 ===")
         logger.info(f"요청 URL: {request.filelink}")
@@ -296,12 +387,44 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
     )
 
+@app.post("/spec/v2/post")
+async def evaluate_resume_v2(resume_data: ResumeData):
+    """이력서 평가 엔드포인트 V2 - 세부 항목 점수 포함"""
+    try:
+        # 입력 데이터 검증
+        if not resume_data.nickname:
+            raise HTTPException(status_code=400, detail="닉네임은 필수입니다.")
+        if not resume_data.desired_job:
+            raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
+            
+        print(f"🔍 평가 시작 (V2): {resume_data.nickname} ({resume_data.desired_job})")
+        
+        # 평가 실행 및 결과 반환
+        result = evaluation_system.evaluate_resume(resume_data.dict())
+        print(f"✅ 평가 완료 (V2): {resume_data.nickname} -> {result.get('totalScore')}점")
+        assessment = result.get('assessment', '')
+        keywords = ['totalscore', 'assessment', '실제 조언 내용']
+        if any(keyword in assessment for keyword in keywords):
+            assessment = '조언생성 실패'
+        return {
+            "nickname": result["nickname"],
+            "totalScore": result['totalScore'],
+            "academicScore": result.get('academicScore', 0.0),
+            "workExperienceScore": result.get('workExperienceScore', 0.0),
+            "certificationScore": result.get('certificationScore', 0.0),
+            "languageProficiencyScore": result.get('languageProficiencyScore', 0.0),
+            "extracurricularScore": result.get('extracurricularScore', 0.0),
+            "assessment": assessment
+        }
+    except Exception as e:
+        error_msg = f"평가 중 오류 발생: {str(e)}"
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
 
-if __name__ == "__main__":
-    uvicorn.run(
-        "main:app", 
-        host="0.0.0.0", 
-        port=8000,
-        log_level="info",
-        access_log=True
-    ) 
+@app.get("/status")
+async def get_system_status():
+    """시스템 상태 확인 엔드포인트"""
+    try:
+        return evaluation_system.get_system_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
