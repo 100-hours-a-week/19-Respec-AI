@@ -1,6 +1,6 @@
 import re
 import json
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List, Union
 
 class ScoreParser:
     """모델 출력에서 점수를 추출하는 클래스"""
@@ -84,29 +84,70 @@ class LanguageScoreValidator:
     
     # 각 시험별 유효 점수 범위 정의
     VALID_RANGES = {
+        # 영어 시험
         "TOEIC": (0, 990),
         "TOEFL": (0, 120),
         "TEPS": (0, 990),
+        "G_TELP": (0, 100),
+        "TOEIC_SPEAKING": (0, 200),
+        "TEPS_SPEAKING": (0, 8),
+        "G_TELP_SPEAKING": (0, 100),
         "IELTS": (0, 9.0),
+        "FLEX": (0, 800),
         "OPIC": ["NL", "NM", "NH", "IL", "IM", "IH", "AL", "AM", "AH"],
+        
+        # 독일어 시험
+        "SNULT": (0, 200),  # 독일어, 프랑스어, 러시아어, 중국어, 일본어, 스페인어 공통
+        
+        # 중국어 시험
+        "NEW_HSK": ["1급", "2급", "3급", "4급", "5급", "6급", "1", "2", "3", "4", "5", "6"],
+        "HSK": ["1급", "2급", "3급", "4급", "5급", "6급", "1", "2", "3", "4", "5", "6"],
+        
+        # 일본어 시험
+        "JPT": (0, 990),
         "JLPT": ["N5", "N4", "N3", "N2", "N1"],
-        "HSK": ["1급", "2급", "3급", "4급", "5급", "6급", "1", "2", "3", "4", "5", "6"]
     }
+    
+    @classmethod
+    def extract_test_type(cls, full_test_type: str) -> str:
+        """
+        전체 시험 유형에서 기본 시험명만 추출
+        예: TOEIC_ENGLISH -> TOEIC, NEW_HSK_CHINESE -> NEW_HSK
+        """
+        # 언어 접미사 제거
+        language_suffixes = ['_ENGLISH', '_GERMAN', '_FRENCH', '_RUSSIAN', 
+                           '_CHINESE', '_JAPANESE', '_SPANISH', '_VIETNAMESE']
+        
+        test_type = full_test_type
+        for suffix in language_suffixes:
+            if test_type.endswith(suffix):
+                test_type = test_type[:-len(suffix)]
+                break
+        
+        return test_type
     
     @classmethod
     def validate_score(cls, test_type: str, score: str) -> Tuple[bool, float]:
         """
         어학점수 검증 및 정규화된 점수 반환
+        Args:
+            test_type: 시험 유형 (예: TOEIC_ENGLISH, NEW_HSK_CHINESE 등)
+            score: 입력된 점수
         Returns:
             Tuple[bool, float]: (유효성 여부, 정규화된 점수)
         """
-        if test_type not in cls.VALID_RANGES:
+        # 기본 시험 유형 추출
+        base_test_type = cls.extract_test_type(test_type)
+        
+        if base_test_type not in cls.VALID_RANGES:
             return False, 0.0
             
         try:
-            if isinstance(cls.VALID_RANGES[test_type], tuple):
+            range_info = cls.VALID_RANGES[base_test_type]
+            
+            if isinstance(range_info, tuple):
                 # 숫자 점수 검증
-                min_score, max_score = cls.VALID_RANGES[test_type]
+                min_score, max_score = range_info
                 numeric_score = float(score)
                 if min_score <= numeric_score <= max_score:
                     # 100점 만점으로 정규화
@@ -114,13 +155,30 @@ class LanguageScoreValidator:
                     return True, normalized_score
                 return False, 0.0
             else:
-                # 등급 검증
-                valid_grades = cls.VALID_RANGES[test_type]
+                # 등급 검증 (리스트 타입)
+                valid_grades = range_info
                 if score.upper() in [str(grade).upper() for grade in valid_grades]:
-                    # 등급을 점수로 변환
+                    # 등급을 점수로 변환 (높은 등급일수록 높은 점수)
                     grade_index = len(valid_grades) - [str(grade).upper() for grade in valid_grades].index(score.upper())
                     normalized_score = (grade_index / len(valid_grades)) * 100
                     return True, normalized_score
                 return False, 0.0
+                
         except (ValueError, AttributeError):
             return False, 0.0
+    
+    @classmethod
+    def get_valid_range_info(cls, test_type: str) -> Union[Tuple[int, int], List[str], None]:
+        """
+        특정 시험의 유효 범위 정보 반환
+        """
+        base_test_type = cls.extract_test_type(test_type)
+        return cls.VALID_RANGES.get(base_test_type)
+    
+    @classmethod
+    def is_supported_test(cls, test_type: str) -> bool:
+        """
+        지원하는 시험인지 확인
+        """
+        base_test_type = cls.extract_test_type(test_type)
+        return base_test_type in cls.VALID_RANGES
