@@ -1284,3 +1284,4 @@ class OCRModel:
     def is_valid_gpa(self, gpa: float) -> bool:
         """학점 유효성 검사"""
         return 0.0 <= gpa <= 4.5
+

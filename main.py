@@ -15,12 +15,14 @@ import requests
 from model import OCRModel
 from pydantic import BaseModel, validator
 
+
 # 로깅 설정 개선
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 # 필요한 디렉토리 생성
 REQUIRED_DIRS = ['static', 'templates', 'temp']
@@ -90,6 +92,7 @@ async def analyze_resume_from_url(request: S3URLRequest):
     """이력서 PDF 분석 (URL 기반) - 개선된 버전"""
     start_time = time.time()
     
+
     try:
         logger.info(f"=== 이력서 분석 시작 ===")
         logger.info(f"요청 URL: {request.filelink}")
@@ -292,6 +295,7 @@ async def general_exception_handler(request: Request, exc: Exception):
             "data": {}
         }
     )
+
 
 if __name__ == "__main__":
     uvicorn.run(
