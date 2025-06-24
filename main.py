@@ -390,6 +390,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 @app.post("/spec/v2/post")
 async def evaluate_resume_v2(resume_data: ResumeData):
     """이력서 평가 엔드포인트 V2 - 세부 항목 점수 포함"""
+    start_time = time.time()  # 시작 시간 측정
+    
     try:
         # 입력 데이터 검증
         if not resume_data.nickname:
@@ -397,15 +399,21 @@ async def evaluate_resume_v2(resume_data: ResumeData):
         if not resume_data.desired_job:
             raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
             
-        print(f"🔍 평가 시작 (V2): {resume_data.nickname} ({resume_data.desired_job})")
+        logger.info(f"🔍 평가 시작 (V2): {resume_data.nickname} ({resume_data.desired_job})")
         
         # 평가 실행 및 결과 반환
         result = evaluation_system.evaluate_resume(resume_data.dict())
-        print(f"✅ 평가 완료 (V2): {resume_data.nickname} -> {result.get('totalScore')}점")
+        
+        # 응답 시간 계산
+        processing_time = time.time() - start_time
+        
+        logger.info(f"✅ 평가 완료 (V2): {resume_data.nickname} -> {result.get('totalScore')}점 (처리시간: {processing_time:.3f}초)")
+        
         assessment = result.get('assessment', '')
         keywords = ['totalscore', 'assessment', '실제 조언 내용']
         if any(keyword in assessment for keyword in keywords):
             assessment = '조언생성 실패'
+        
         return {
             "nickname": result["nickname"],
             "totalScore": result['totalScore'],
@@ -414,11 +422,47 @@ async def evaluate_resume_v2(resume_data: ResumeData):
             "certificationScore": result.get('certificationScore', 0.0),
             "languageProficiencyScore": result.get('languageProficiencyScore', 0.0),
             "extracurricularScore": result.get('extracurricularScore', 0.0),
-            "assessment": assessment
+            "assessment": assessment,
         }
     except Exception as e:
+        # 에러 발생 시에도 처리 시간 계산
+        processing_time = time.time() - start_time
         error_msg = f"평가 중 오류 발생: {str(e)}"
-        print(f"❌ {error_msg}")
+        logger.error(f"❌ {error_msg} (처리시간: {processing_time:.3f}초)")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/spec/v1/post")
+async def evaluate_resume_v1(resume_data: ResumeData):
+    """이력서 평가 엔드포인트 V1 - 총점만 반환"""
+    start_time = time.time()  # 시작 시간 측정
+    
+    try:
+        # 입력 데이터 검증
+        if not resume_data.nickname:
+            raise HTTPException(status_code=400, detail="닉네임은 필수입니다.")
+        if not resume_data.desired_job:
+            raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
+            
+        logger.info(f"🔍 평가 시작 (V1): {resume_data.nickname} ({resume_data.desired_job})")
+        
+        # 평가 실행 및 결과 반환
+        result = evaluation_system.evaluate_resume(resume_data.dict())
+        
+        # 응답 시간 계산
+        processing_time = time.time() - start_time
+        
+        logger.info(f"✅ 평가 완료 (V1): {resume_data.nickname} -> {result.get('totalScore')}점 (처리시간: {processing_time:.3f}초)")
+        
+        return {
+            "nickname": result["nickname"],
+            "totalScore": result['totalScore'],
+            "processing_time": round(processing_time, 3)  # 소수점 3자리까지 반올림
+        }
+    except Exception as e:
+        # 에러 발생 시에도 처리 시간 계산
+        processing_time = time.time() - start_time
+        error_msg = f"평가 중 오류 발생: {str(e)}"
+        logger.error(f"❌ {error_msg} (처리시간: {processing_time:.3f}초)")
         raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/status")
