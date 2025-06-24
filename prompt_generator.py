@@ -158,22 +158,89 @@ class ScoreCalculator:
         return min(total_score, self.weights.experience_max)
     
     def calculate_activity_score(self, matches: List[Dict]) -> float:
-        """활동 점수 계산"""
+        """활동 점수 계산 - 직책과 수상 여부 고려"""
         total_score = 0.0
         
         for match in matches[:3]:
             similarity = match.get('similarity', 0)
+            role = match.get('role', '')  # 활동에서의 직책/역할
+            award = match.get('award', '')  # 수상 여부
+            activity_name = match.get('activity_name', '')  # 활동명
             
+            # 기본 활동 관련성 점수
             if similarity >= 0.8:
-                activity_score = self.weights.activity_max * self.weights.activity_relevance_ratio * similarity
+                base_score = self.weights.activity_max * self.weights.activity_relevance_ratio * similarity
             elif similarity >= 0.6:
-                activity_score = self.weights.activity_max * self.weights.activity_relevance_ratio * similarity * 0.8
+                base_score = self.weights.activity_max * self.weights.activity_relevance_ratio * similarity * 0.8
             else:
                 continue
-                
-            total_score += activity_score
+            
+            # 직책/역할 가중치 계산
+            role_weight = self._calculate_role_weight(role)
+            
+            # 수상 여부 가중치 계산
+            award_weight = self._calculate_award_weight(award)
+            
+            # 최종 점수 계산 (기본점수 * 직책가중치 * 수상가중치)
+            final_score = base_score * role_weight * award_weight
+            total_score += final_score
         
-        return min(total_score, self.weights.activity_max * 0.7)
+        return min(total_score, self.weights.activity_max)
+    
+    def _calculate_role_weight(self, role: str) -> float:
+        """활동에서의 직책/역할에 따른 가중치 계산"""
+        if not role:
+            return 1.0  # 기본값
+        
+        role_lower = role.lower()
+        
+        # 리더십 역할 (높은 가중치)
+        leadership_keywords = ['회장', '부회장', '단장', '팀장', '대표', 'president', 'vice president', 
+                             'leader', 'captain', 'chair', 'director', 'coordinator']
+        for keyword in leadership_keywords:
+            if keyword in role_lower:
+                return 1.3
+        
+        # 중간 역할 (보통 가중치)
+        mid_keywords = ['부장', '차장', '과장', '대리', '주임', 'manager', 'supervisor', 
+                       'secretary', 'treasurer', 'member', 'staff']
+        for keyword in mid_keywords:
+            if keyword in role_lower:
+                return 1.1
+        
+        # 일반 멤버 (기본 가중치)
+        member_keywords = ['회원', '멤버', 'member', 'participant', 'student']
+        for keyword in member_keywords:
+            if keyword in role_lower:
+                return 1.0
+        
+        # 매칭되지 않는 경우 기본값
+        return 1.0
+    
+    def _calculate_award_weight(self, award: str) -> float:
+        """수상 여부에 따른 가중치 계산"""
+        if not award:
+            return 1.0  # 수상 정보가 없는 경우 기본값
+        
+        award_lower = award.lower()
+        
+        # 수상 관련 키워드 확인
+        award_keywords = ['수상', '상', 'award', 'prize', 'winner', '1등', '2등', '3등', 
+                         '금상', '은상', '동상', '우수상', '장려상', '특별상', '우수상', '대표이사상', '이사상', '최우수상']
+        
+        for keyword in award_keywords:
+            if keyword in award_lower:
+                # 수상 등급에 따른 차등 가중치
+                if any(grade in award_lower for grade in ['1등', '금상', '대상', '최우수상','대표이사상']):
+                    return 1.4
+                elif any(grade in award_lower for grade in ['2등', '은상', '이사상','우수상']):
+                    return 1.3
+                elif any(grade in award_lower for grade in ['3등', '동상', '특별상','장려상']):
+                    return 1.2
+                else:
+                    return 1.1  # 기타 수상
+        
+        return 1.0  # 수상하지 않은 경우
     
     def get_total_score(self) -> float:
         """총점 계산"""
