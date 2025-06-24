@@ -127,6 +127,17 @@ class ScoreCalculator:
         for match in matches[:3]:
             similarity = match.get('similarity', 0)
             duration_months = match.get('work_month', 0)
+            position = match.get('position', '')  # 직책 정보 가져오기
+            
+            # 직책별 가중치 설정
+            position_weight = 1.0  # 기본값 (정규직)
+            if position:
+                position_lower = position.lower()
+                if '인턴' in position_lower:
+                    position_weight = 0.8
+                elif '대표' in position_lower:
+                    position_weight = 1.2
+                # 정규직은 기본값 1.0 유지
             
             # 직무 관련성 점수
             if similarity >= 0.8:
@@ -140,7 +151,9 @@ class ScoreCalculator:
             duration_score = min(duration_months * (self.weights.experience_max * self.weights.exp_duration_ratio),
                                self.weights.experience_max * self.weights.exp_duration_ratio)
             
-            total_score += (relevance_score + duration_score)
+            # 직책 가중치 적용
+            weighted_score = (relevance_score + duration_score) * position_weight
+            total_score += weighted_score
         
         return min(total_score, self.weights.experience_max)
     
