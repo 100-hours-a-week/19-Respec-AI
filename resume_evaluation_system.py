@@ -86,7 +86,7 @@ class ResumeEvaluationSystem:
     def _extract_assessment_from_response(self, response: str) -> str:
         """LLM 응답에서 assessment 값만 추출하는 함수"""
         try:
-            print(f"🔍 원본 응답: {response[:200]}...")  # 디버깅용
+            # print(f"🔍 원본 응답: {response[:200]}...")  # 디버깅용
             
             # 방법 1: assessment": "내용" 패턴으로 직접 추출 (가장 안전)
             assessment_patterns = [
@@ -100,7 +100,7 @@ class ResumeEvaluationSystem:
                 match = re.search(pattern, response, re.IGNORECASE)
                 if match:
                     assessment_text = match.group(1)
-                    print(f"✅ Pattern으로 추출 성공: {assessment_text}")
+                    # print(f"✅ Pattern으로 추출 성공: {assessment_text}")
                     return assessment_text
             
             # 방법 2: JSON 블록 전체 추출 후 파싱
@@ -119,7 +119,7 @@ class ResumeEvaluationSystem:
                         parsed = json.loads(json_str)
                         if "assessment" in parsed:
                             assessment_text = parsed["assessment"]
-                            print(f"✅ JSON 파싱으로 추출 성공: {assessment_text}")
+                            # print(f"✅ JSON 파싱으로 추출 성공: {assessment_text}")
                             return assessment_text
                     except json.JSONDecodeError as je:
                         print(f"⚠️ JSON 파싱 실패: {je}")
@@ -135,7 +135,7 @@ class ResumeEvaluationSystem:
                         # 따옴표와 특수문자 제거
                         cleaned = re.sub(r'^["\'\s,{]+|["\'\s,}]+$', '', after_colon)
                         if cleaned and len(cleaned) > 5:  # 의미있는 길이의 텍스트
-                            print(f"✅ 라인 분석으로 추출: {cleaned}")
+                            # print(f"✅ 라인 분석으로 추출: {cleaned}")
                             return cleaned
             
             # 방법 4: 전체 응답에서 의미있는 한국어 문장 추출
@@ -144,10 +144,10 @@ class ResumeEvaluationSystem:
                 # 가장 긴 한국어 문장을 선택
                 longest_sentence = max(korean_sentences, key=len).strip()
                 if len(longest_sentence) > 10:
-                    print(f"✅ 한국어 문장 추출: {longest_sentence[:50]}...")
+                    # print(f"✅ 한국어 문장 추출: {longest_sentence[:50]}...")
                     return longest_sentence[:100]  # 100자로 제한
             
-            print("❌ 모든 추출 방법 실패")
+            # print("❌ 모든 추출 방법 실패")
             return "구체적인 스펙 분석 후 개선방안을 제시드릴 수 있습니다."
             
         except Exception as e:

@@ -284,20 +284,16 @@ class ScoreReporter:
     def print_score_breakdown(scores: Dict[str, float]) -> str:
         """점수 분석 결과 출력 및 프롬프트용 텍스트 반환"""
         # 콘솔 출력
-        print("\n=== 🎯 이력서 점수 분석 결과 ===")
         total = 0.0
         prompt_lines = []
         
         for category, score in scores.items():
             line = f"📌 {category}: {score:.2f}점"
-            print(line)
             prompt_lines.append(line)
             total += score
         
         total_line = f"📊 총점: {total:.2f}점"
-        print(total_line)
         prompt_lines.append(total_line)
-        print("=" * 30)
         
         # 프롬프트용 텍스트 생성
         prompt_text = "\n=== 📊 현재 계산된 점수 ===\n"
@@ -310,7 +306,6 @@ class ScoreReporter:
     def print_normalized_scores(normalized_scores: Dict[str, float]) -> str:
         """100점 만점 기준 점수 출력 및 프롬프트용 텍스트 반환"""
         # 콘솔 출력
-        print("\n=== 🎯 100점 만점 기준 점수 ===")
         category_names = {
             "academic": "학력",
             "certification": "자격증", 
@@ -322,9 +317,7 @@ class ScoreReporter:
         prompt_lines = []
         for category, score in normalized_scores.items():
             line = f"📌 {category_names[category]}: {score:.2f}/100점"
-            print(line)
             prompt_lines.append(line)
-        print("=" * 30)
         
         # 프롬프트용 텍스트 생성
         prompt_text = "\n=== 🎯 100점 만점 기준 점수 ===\n"

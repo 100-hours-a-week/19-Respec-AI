@@ -10,7 +10,7 @@ class ScoreParser:
 
     def extract_score(self, full_output):
         """출력 텍스트에서 점수 추출"""
-        print(f"모델 출력 전체: {full_output}")
+        # print(f"모델 출력 전체: {full_output}")
         
         # 먼저 assistant 응답 부분 추출 후 숫자 찾기
         assistant_pattern = r'<\|im_start\|>assistant\n(.*?)(?:<\|im_end\|>|<\|endofturn\|>)'
