@@ -219,17 +219,13 @@ class ResumeEvaluationSystem:
         # 어학 정보 수집 및 검증
         if spec_data.get('languages'):
             context['language_scores'] = []
-            total_language_score = 0.0
-            valid_score_count = 0
+            language_scores = []  # 개별 어학 점수 저장
             
             for lang in spec_data['languages']:
                 is_valid, normalized_score = LanguageScoreValidator.validate_score(
                     lang['test'], 
                     lang['score_or_grade']
                 )
-                if is_valid:
-                    valid_score_count += 1
-                    total_language_score += normalized_score
                 
                 context['language_scores'].append({
                     'test': lang['test'],
@@ -237,10 +233,16 @@ class ResumeEvaluationSystem:
                     'is_valid': is_valid,
                     'normalized_score': normalized_score
                 })
+                
+                if is_valid:
+                    language_scores.append(normalized_score)
             
-            # 평균 어학 점수 계산
-            if valid_score_count > 0:
-                context['average_language_score'] = total_language_score / valid_score_count
+            # 가장 높은 점수에 나머지는 10%만 추가하는 방식으로 계산
+            if language_scores:
+                max_score = max(language_scores)
+                remaining_scores = [score for score in language_scores if score != max_score]
+                bonus_from_others = sum(remaining_scores) * 0.1
+                context['average_language_score'] = max_score + bonus_from_others
             else:
                 context['average_language_score'] = 0.0
         

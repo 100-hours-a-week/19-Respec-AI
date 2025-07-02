@@ -99,32 +99,54 @@ class ScoreCalculator:
             return max_score * 0.4
     
     def calculate_certification_score(self, matches: List[Dict]) -> float:
-        """자격증 점수 계산"""
-        total_score = 0.0
-        relevance_score = 0.0
+        """자격증 점수 계산 - 가장 높은 점수에 나머지는 10%만 추가"""
+        if not matches:
+            return 0.0
         
-        # 관련성 점수 계산
-        for match in matches[:3]:
+        # 각 자격증의 개별 점수 계산
+        individual_scores = []
+        
+        for match in matches:
             similarity = match.get('similarity', 0)
+            individual_score = 0.0
+            
             if similarity >= 0.8:
-                relevance_score += self.weights.cert_max * self.weights.cert_relevance_ratio * 0.8
+                individual_score = self.weights.cert_max * self.weights.cert_relevance_ratio
             elif similarity >= 0.6:
-                relevance_score += self.weights.cert_max * self.weights.cert_relevance_ratio * 0.5
+                individual_score = self.weights.cert_max * self.weights.cert_relevance_ratio * 0.5
             elif similarity >= 0.4:
-                relevance_score += self.weights.cert_max * self.weights.cert_relevance_ratio * 0.3
+                individual_score = self.weights.cert_max * self.weights.cert_relevance_ratio * 0.3
+            
+            individual_scores.append(individual_score)
         
-        # 개수 보너스
+        # 개수 보너스 계산
         count_bonus = min(len(matches) * 1.0, 
                          self.weights.cert_max * self.weights.cert_count_ratio)
         
-        total_score = relevance_score + count_bonus
+        if not individual_scores:
+            return min(count_bonus, self.weights.cert_max)
+        
+        # 가장 높은 점수 찾기
+        max_score = max(individual_scores)
+        
+        # 나머지 점수들의 10% 계산
+        remaining_scores = [score for score in individual_scores if score != max_score]
+        bonus_from_others = sum(remaining_scores) * 0.1
+        
+        # 최종 점수 = 최고점 + 나머지 10% + 개수보너스
+        total_score = max_score + bonus_from_others + count_bonus
+        
         return min(total_score, self.weights.cert_max)
     
     def calculate_experience_score(self, matches: List[Dict]) -> float:
-        """경력 점수 계산"""
-        total_score = 0.0
+        """경력 점수 계산 - 가장 높은 점수에 나머지는 10%만 추가"""
+        if not matches:
+            return 0.0
         
-        for match in matches[:3]:
+        # 각 경력의 개별 점수 계산
+        individual_scores = []
+        
+        for match in matches:
             similarity = match.get('similarity', 0)
             duration_months = match.get('work_month', 0)
             position = match.get('position', '')  # 직책 정보 가져오기
@@ -153,15 +175,32 @@ class ScoreCalculator:
             
             # 직책 가중치 적용
             weighted_score = (relevance_score + duration_score) * position_weight
-            total_score += weighted_score
+            individual_scores.append(weighted_score)
+        
+        if not individual_scores:
+            return 0.0
+        
+        # 가장 높은 점수 찾기
+        max_score = max(individual_scores)
+        
+        # 나머지 점수들의 10% 계산
+        remaining_scores = [score for score in individual_scores if score != max_score]
+        bonus_from_others = sum(remaining_scores) * 0.1
+        
+        # 최종 점수 = 최고점 + 나머지 10%
+        total_score = max_score + bonus_from_others
         
         return min(total_score, self.weights.experience_max)
     
     def calculate_activity_score(self, matches: List[Dict]) -> float:
-        """활동 점수 계산 - 직책과 수상 여부 고려"""
-        total_score = 0.0
+        """활동 점수 계산 - 가장 높은 점수에 나머지는 10%만 추가"""
+        if not matches:
+            return 0.0
         
-        for match in matches[:3]:
+        # 각 활동의 개별 점수 계산
+        individual_scores = []
+        
+        for match in matches:
             similarity = match.get('similarity', 0)
             role = match.get('role', '')  # 활동에서의 직책/역할
             award = match.get('award', '')  # 수상 여부
@@ -183,7 +222,20 @@ class ScoreCalculator:
             
             # 최종 점수 계산 (기본점수 * 직책가중치 * 수상가중치)
             final_score = base_score * role_weight * award_weight
-            total_score += final_score
+            individual_scores.append(final_score)
+        
+        if not individual_scores:
+            return 0.0
+        
+        # 가장 높은 점수 찾기
+        max_score = max(individual_scores)
+        
+        # 나머지 점수들의 10% 계산
+        remaining_scores = [score for score in individual_scores if score != max_score]
+        bonus_from_others = sum(remaining_scores) * 0.1
+        
+        # 최종 점수 = 최고점 + 나머지 10%
+        total_score = max_score + bonus_from_others
         
         return min(total_score, self.weights.activity_max)
     
