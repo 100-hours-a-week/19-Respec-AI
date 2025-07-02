@@ -94,7 +94,7 @@ class LanguageScoreValidator:
         "G_TELP_SPEAKING": (0, 100),
         "IELTS": (0, 9.0),
         "FLEX": (0, 800),
-        "OPIC": ["NL", "NM", "NH", "IL", "IM", "IH", "AL", "AM", "AH"],
+        "OPIC": ["NL", "NM", "NH", "IL", "IM", "IM1", "IM2", "IM3", "IH", "AL"],
         
         # 독일어 시험
         "SNULT": (0, 200),  # 독일어, 프랑스어, 러시아어, 중국어, 일본어, 스페인어 공통
