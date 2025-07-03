@@ -472,3 +472,28 @@ async def get_system_status():
         return evaluation_system.get_system_status()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/docs/test")
+async def test_spec_v2_endpoint():
+    """스펙 평가 V2 엔드포인트 자동 테스트"""
+    try:
+        # testcode.py를 런타임에 import (순환 참조 방지)
+        from testcode import run_spec_v2_tests
+        
+        print("🚀 /docs/test 엔드포인트 호출됨")
+        test_results = await run_spec_v2_tests(evaluation_system)
+        print(f"✅ 테스트 완료: {test_results.get('overall_status')}")
+        
+        return test_results
+    except Exception as e:
+        print(f"❌ 테스트 시스템 오류: {str(e)}")
+        return {
+            "test_name": "Spec V2 Endpoint Test Suite",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "overall_status": "SYSTEM_ERROR",
+            "error_message": f"테스트 시스템 오류: {str(e)}",
+            "total_tests": 0,
+            "passed_tests": 0,
+            "failed_tests": 0,
+            "test_cases": []
+        }
