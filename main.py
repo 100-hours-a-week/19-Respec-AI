@@ -473,7 +473,7 @@ async def get_system_status():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/docs/test")
+@app.get("/yuju/test")
 async def test_spec_v2_endpoint():
     """스펙 평가 V2 엔드포인트 자동 테스트"""
     try:
