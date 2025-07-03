@@ -16,10 +16,10 @@ class DatabaseConfig:
             
         load_dotenv()
         self.config = {
-            'host': os.environ.get('HOST'),
+            'host': os.environ.get('DB_HOST'),
             'database': os.environ.get('DATABASE'),
-            'user': os.environ.get('USER'),
-            'password': os.environ.get('PASSWORD')
+            'user': os.environ.get('DB_USER'),
+            'password': os.environ.get('DB_PASSWORD')
         }
         self._initialized = True
     
