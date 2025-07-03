@@ -71,11 +71,11 @@ class ResumeEvaluationSystem:
             return {
                 "nickname": spec_data['nickname'],
                 "totalScore": score,
-                "academicScore": normalized_scores.get("academic", 0.0),
-                "workExperienceScore": normalized_scores.get("workExperience", 0.0),
-                "certificationScore": normalized_scores.get("certification", 0.0),
-                "languageProficiencyScore": normalized_scores.get("languageProficiency", 0.0),
-                "extracurricularScore": normalized_scores.get("extracurricular", 0.0),
+                "academicScore": min(normalized_scores.get("academic", 0.0),100),
+                "workExperienceScore": min(normalized_scores.get("workExperience", 0.0),100),
+                "certificationScore": min(normalized_scores.get("certification", 0.0),100),
+                "languageProficiencyScore": min(normalized_scores.get("languageProficiency", 0.0),100),
+                "extracurricularScore": min(normalized_scores.get("extracurricular", 0.0),100),
                 "assessment": assessment_text  # 📌 assessment 값만 포함
             }
             
