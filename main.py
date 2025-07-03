@@ -5,15 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-import time
-import re
 from pydantic import BaseModel, Field, validator, field_validator
-import os
-import uvicorn
-import requests
 from urllib.parse import urlparse
 from resume_evaluation_system import ResumeEvaluationSystem
 from model import OCRModel
+import time
+import re
+import os
+import uvicorn
+import requests
 import logging
 
 # 로깅 설정 개선

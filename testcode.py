@@ -1,13 +1,9 @@
-"""
-스펙 평가 V2 엔드포인트 자동 테스트 모듈
-"""
-import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from pydantic import BaseModel
 import asyncio
 import traceback
-from pydantic import BaseModel
-
+import time
 
 # ====== 테스트용 모델들 직접 정의 (순환 참조 방지) ======
 class TestUniversity(BaseModel):
