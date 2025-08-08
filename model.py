@@ -1,1104 +1,1287 @@
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import json
+import easyocr
 import numpy as np
-from tqdm import tqdm
-import hashlib
-import time
-import redis
-from functools import lru_cache
+from PIL import Image
+import logging
+from typing import List, Tuple, Dict, Optional
+import io
+import PyPDF2
+import fitz  # PyMuPDF
+import re
+from datetime import datetime
+import torch
+import os
+import requests
+import boto3
+from urllib.parse import urlparse
+import tempfile
+from io import BytesIO
 
-class SpecEvaluator:
-    def __init__(self, use_redis=True, redis_host="localhost", redis_port=6379, redis_db=0, cache_ttl=86400):
-        # 기존 초기화 코드는 동일하게 유지
-        print("XGLM-564M 모델 로딩 중...")
-        # XGLM-564M 모델 로드
-        self.model_name = "facebook/xglm-564M"
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
-        
-        # 디바이스 설정 추가
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
-        
-        # KV 캐시 활성화 여부 추가
-        self.use_kv_cache = True
-        
-        # 캐시 설정 추가
-        self.use_redis = use_redis
-        self.cache_ttl = cache_ttl
-        self.memory_cache = {}  # 메모리 캐시 초기화
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-        # Redis 캐시 설정 추가
-        if self.use_redis:
-            try:
-                self.redis_client = redis.Redis(
-                    host=redis_host,
-                    port=redis_port,
-                    db=redis_db,
-                    decode_responses=True
-                )
-                print("Redis 캐시 연결 성공")
-            except Exception as e:
-                print(f"Redis 캐시 연결 실패: {e}")
-                self.use_redis = False
-                print("메모리 캐시로 대체합니다.")
+class OCRModel:
+    def __init__(self):
+        """EasyOCR 모델 초기화"""
+        logger.info("EasyOCR 모델 초기화 중...")
         
-        # 기본 평가 가중치 설정 (각 항목별 중요도)
-        self.weights = {
-            "universities": 0.3,  # 학력
-            "careers": 0.35,      # 경력
-            "certificates": 0.15, # 자격증
-            "languages": 0.15,    # 어학
-            "activities": 0.05    # 활동
-        }
-        
-        # 직무별 가중치 조정값 (기본 가중치에 가감)
-        self.job_weights = {
-            "경영·사무": {
-                "universities": 0.00,   # 학력 가중치 유지
-                "careers": -0.05,       # 경력 가중치 감소
-                "certificates": 0.04,   # 자격증 가중치 증가
-                "languages": 0.04,      # 어학 가중치 증가
-                "activities": -0.03     # 활동 가중치 감소
-            },
-            "마케팅·광고·홍보": {
-                "universities": -0.05,  # 학력 가중치 감소
-                "careers": 0.02,        # 경력 가중치 증가
-                "certificates": 0.00,   # 자격증 가중치 유지
-                "languages": 0.02,      # 어학 가중치 증가
-                "activities": 0.01      # 활동 가중치 증가
-            },
-            "무역·유통": {
-                "universities": 0.05,   # 학력 가중치 증가
-                "careers": 0.05,        # 경력 가중치 증가
-                "certificates": -0.03,  # 자격증 가중치 감소
-                "languages": -0.03,     # 어학 가중치 감소
-                "activities": -0.04     # 활동 가중치 감소
-            },
-            "인터넷·IT": {
-                "universities": 0.00,   # 학력 가중치 유지
-                "careers": 0.10,        # 경력 가중치 증가
-                "certificates": -0.05,  # 자격증 가중치 감소
-                "languages": -0.10,     # 어학 가중치 감소
-                "activities": 0.05      # 활동 가중치 증가
-            },
-            "생산·제조": {
-                "universities": -0.05,  # 학력 가중치 감소
-                "careers": 0.15,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.10,     # 어학 가중치 감소
-                "activities": -0.05     # 활동 가중치 감소
-            },
-            "영업·고객상담": {
-                "universities": 0.10,   # 학력 가중치 증가
-                "careers": 0.05,        # 경력 가중치 증가
-                "certificates": -0.06,  # 자격증 가중치 감소
-                "languages": -0.06,     # 어학 가중치 감소
-                "activities": -0.03     # 활동 가중치 감소
-            },
-            "건설": {
-                "universities": 0.00,   # 학력 가중치 유지
-                "careers": 0.15,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.15,     # 어학 가중치 감소
-                "activities": -0.05     # 활동 가중치 감소
-            },
-            "금융": {
-                "universities": 0.10,   # 학력 가중치 증가
-                "careers": 0.05,        # 경력 가중치 증가
-                "certificates": -0.06,   # 자격증 가중치 감소
-                "languages": -0.06,     # 어학 가중치 감소
-                "activities": -0.03     # 활동 가중치 감소
-            },
-            "연구개발·설계": {
-                "universities": -0.06,  # 학력 가중치 감소
-                "careers": -0.11,       # 경력 가중치 감소
-                "certificates": 0.09,   # 자격증 가중치 증가
-                "languages": 0.09,      # 어학 가중치 증가
-                "activities": -0.02     # 활동 가중치 감소
-            },
-            "디자인": {
-                "universities": -0.05,  # 학력 가중치 감소
-                "careers": 0.10,        # 경력 가중치 증가
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.10,     # 어학 가중치 감소
-                "activities": 0.00      # 활동 가중치 유지
-            },
-            "미디어": {
-                "universities": -0.05,  # 학력 가중치 감소
-                "careers": 0.05,        # 경력 가중치 증가
-                "certificates": 0.00,   # 자격증 가중치 유지
-                "languages": 0.00,      # 어학 가중치 유지
-                "activities": 0.00      # 활동 가중치 유지
-            },
-            "전문·특수직": {
-                "universities": 0.05,   # 학력 가중치 증가
-                "careers": 0.00,        # 경력 가중치 유지
-                "certificates": 0.05,   # 자격증 가중치 증가
-                "languages": -0.10,     # 어학 가중치 감소
-                "activities": 0.00      # 활동 가중치 유지
-            }
-        }
-        
-        # 점수 정규화 파라미터
-        self.min_score = 40  # 최소 점수
-        self.max_score = 95  # 최대 점수
-        
-        # 캐시 통계
-        self.cache_hits = 0
-        self.cache_misses = 0
-        
-        print("모델 초기화 완료!")
-    
-    def prepare_prompt(self, spec_data):
-        """스펙 데이터를 평가하기 위한 프롬프트 준비"""
-        # 지원직종에 따른 맞춤형 프롬프트 생성
-        if isinstance(spec_data, str):
-            spec_data = json.loads(spec_data)
-        job = spec_data.get("desired_job", "일반")
-        
-        # 지원직종에 따른 맞춤형 프롬프트 생성
-        job_specific_description = ""
-        if job == "경영·사무":
-            job_specific_description = "경영 및 사무 직종은 조직 관리, 행정 업무, 문서작성 등의 능력이 중요합니다."
-        elif job == "마케팅·광고·홍보":
-            job_specific_description = "마케팅, 광고, 홍보 분야는 창의성, 커뮤니케이션 능력, 트렌드 분석 능력이 중요합니다."
-        elif job == "무역·유통":
-            job_specific_description = "무역 및 유통 분야는 글로벌 비즈니스 역량, 어학 능력, 물류 이해도가 중요합니다."
-        elif job == "인터넷·IT":
-            job_specific_description = "IT 분야는 기술적 전문성, 프로그래밍 능력, 문제 해결 능력이 중요합니다."
-        elif job == "생산·제조":
-            job_specific_description = "생산 및 제조 분야는 공정 이해도, 품질 관리 능력, 현장 경험이 중요합니다."
-        elif job == "영업·고객상담":
-            job_specific_description = "영업 및 고객상담 분야는 설득력, 대인관계 능력, 고객 니즈 파악 능력이 중요합니다."
-        elif job == "건설":
-            job_specific_description = "건설 분야는 전문 기술, 현장 경험, 안전 관리 능력이 중요합니다."
-        elif job == "금융":
-            job_specific_description = "금융 분야는 수리 능력, 경제 이해도, 분석력이 중요합니다."
-        elif job == "연구개발·설계":
-            job_specific_description = "연구개발 및 설계 분야는 전문 지식, 분석력, 창의적 문제 해결 능력이 중요합니다."
-        elif job == "디자인":
-            job_specific_description = "디자인 분야는 창의성, 트렌드 감각, 시각적 표현 능력이 중요합니다."
-        elif job == "미디어":
-            job_specific_description = "미디어 분야는 콘텐츠 제작 능력, 스토리텔링, 커뮤니케이션 능력이 중요합니다."
-        elif job == "전문·특수직":
-            job_specific_description = "전문 및 특수직은 해당 분야의 깊은 전문성, 자격증, 경험이 중요합니다."
-        
-        prompt = f"""
-        다음은 '{job}' 직종에 지원한 지원자의 스펙입니다. 
-        {job_specific_description}
-        이 스펙을 100점 만점으로 평가해주세요.
-
-        [지원자 정보]
-        닉네임: {spec_data.get('nickname', '이름 없음')}
-        최종학력: {spec_data.get('final_edu', '정보 없음')} ({spec_data.get('final_status', '정보 없음')})
-        지원 직종: {job}
-
-        """
-        
-        # 대학 정보 추가
-        if "universities" in spec_data and spec_data["universities"]:
-            prompt += "[학력 사항]\n"
-            for uni in spec_data["universities"]:
-                gpa_info = f"{uni.get('gpa', '정보 없음')}/{uni.get('gpa_max', '정보 없음')}" if 'gpa' in uni else "정보 없음"
-                prompt += f"- {uni.get('school_name', '정보 없음')}, {uni.get('degree', '정보 없음')}, {uni.get('major', '정보 없음')}, GPA: {gpa_info}\n"
-        
-        # 경력 정보 추가 (work_month 포함)
-        if "careers" in spec_data and spec_data["careers"]:
-            prompt += "\n[경력 사항]\n"
-            for career in spec_data["careers"]:
-                work_month_info = f", 근무기간: {career.get('work_month', '정보 없음')}개월" if 'work_month' in career else ""
-                prompt += f"- {career.get('company', '정보 없음')}, {career.get('role', '정보 없음')}{work_month_info}\n"
-        
-        # 자격증 정보 추가
-        if "certificates" in spec_data and spec_data["certificates"]:
-            prompt += "\n[자격증]\n"
-            for cert in spec_data["certificates"]:
-                prompt += f"- {cert}\n"
-        
-        # 어학 정보 추가
-        if "languages" in spec_data and spec_data["languages"]:
-            prompt += "\n[어학 능력]\n"
-            for lang in spec_data["languages"]:
-                prompt += f"- {lang.get('test', '정보 없음')}: {lang.get('score_or_grade', '정보 없음')}\n"
-        
-        # 활동 정보 추가
-        if "activities" in spec_data and spec_data["activities"]:
-            prompt += "\n[대외 활동]\n"
-            for activity in spec_data["activities"]:
-                award_info = f", 수상: {activity.get('award')}" if activity.get('award') else ""
-                prompt += f"- {activity.get('name', '정보 없음')}, 역할: {activity.get('role', '정보 없음')}{award_info}\n"
-        
-        # 평가 지시 추가
-        prompt += f"""
-        위 지원자의 스펙을 '{job}' 직종에 적합한지 평가하여 점수를 매겨주세요.
-        점수는 0-100 사이의 숫자로만 표현해 주세요.
-
-        종합 평가 점수:"""
-        
-        return prompt
-    
-    def generate_cache_key(self, spec_data):
-        """스펙 데이터로부터 캐시 키 생성"""
-        # JSON 직렬화 및 정렬하여 일관된 해시 생성
-        spec_json = json.dumps(spec_data, sort_keys=True)
-        return hashlib.md5(spec_json.encode()).hexdigest()
-
-    def get_from_cache(self, cache_key):
-        """캐시에서 결과 조회"""
-        if self.use_redis:
-            try:
-                cached_data = self.redis_client.get(cache_key)
-                if cached_data:
-                    return json.loads(cached_data)
-            except Exception as e:
-                print(f"Redis 캐시 조회 실패: {e}")
-        
-        # Redis 실패 시 메모리 캐시 확인
-        return self.memory_cache.get(cache_key)
-
-    def save_to_cache(self, cache_key, result):
-        """결과를 캐시에 저장"""
-        if self.use_redis:
-            try:
-                self.redis_client.setex(
-                    cache_key,
-                    self.cache_ttl,
-                    json.dumps(result)
-                )
-            except Exception as e:
-                print(f"Redis 캐시 저장 실패: {e}")
-                # Redis 실패 시 메모리 캐시 사용
-                self.memory_cache[cache_key] = result
+        # GPU 사용 가능 여부 확인
+        if torch.backends.mps.is_available():
+            device = 'mps'
+            logger.info("MPS (Apple Silicon GPU) 사용")
+            # EasyOCR이 MPS를 인식하도록 환경 변수 설정
+            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+        elif torch.cuda.is_available():
+            device = 'cuda'
+            logger.info("CUDA GPU 사용")
         else:
-            # Redis 미사용 시 메모리 캐시 사용
-            self.memory_cache[cache_key] = result
-            
-            # 메모리 캐시 크기 제한 (1000개 항목)
-            if len(self.memory_cache) > 1000:
-                # 가장 오래된 키 하나 제거
-                oldest_key = next(iter(self.memory_cache))
-                del self.memory_cache[oldest_key]
+            device = 'cpu'
+            logger.info("CPU 사용")
+        
+        # EasyOCR 초기화 시 GPU 사용 설정
+        gpu_available = device != 'cpu'
+        self.reader = easyocr.Reader(['ko', 'en'], gpu=gpu_available)
+        logger.info(f"EasyOCR 모델 초기화 완료 (GPU: {gpu_available})")
 
-    def evaluate_with_llm(self, prompt, spec_data):  # spec_data 파라미터 추가
-        """XGLM 모델을 사용하여 스펙을 평가 (KV 캐시 활용)"""
-        # 토큰화
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+    def download_from_s3_url(self, s3_url: str) -> bytes:
+        """S3 URL에서 파일 다운로드 - 개선된 버전"""
+        logger.info(f"URL에서 파일 다운로드 중: {s3_url}")
         
-        # 모델 추론 (KV 캐시 활용)
-        with torch.no_grad():
-            # KV 캐시 사용 설정
-            if self.use_kv_cache:
-                # use_cache=True를 명시적으로 설정하여 KV 캐시 활성화
-                outputs = self.model.generate(
-                    inputs["input_ids"],
-                    max_new_tokens=5,  # 점수만 생성하므로 짧게 설정
-                    temperature=0.7,   # 약간의 다양성 허용
-                    top_p=0.9,         # 핵심 토큰에 집중
-                    do_sample=True,    # 샘플링 사용
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    use_cache=True,    # KV 캐시 활성화
-                )
-            else:
-                # KV 캐시를 사용하지 않는 경우
-                outputs = self.model.generate(
-                    inputs["input_ids"],
-                    max_new_tokens=5,  # 점수만 생성하므로 짧게 설정
-                    temperature=0.7,   # 약간의 다양성 허용
-                    top_p=0.9,         # 핵심 토큰에 집중
-                    do_sample=True,    # 샘플링 사용
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    use_cache=False,   # KV 캐시 비활성화
-                )
-        
-        # 결과 디코딩
-        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # 프롬프트 이후 생성된 텍스트만 추출
-        generated_score = generated_text[len(prompt):]
-        
-        # 생성된 텍스트에서 숫자만 추출 시도
         try:
-            # 숫자 형태의 문자열 추출
-            import re
-            score_match = re.search(r'\d+(\.\d+)?', generated_score)  # 소수점도 인식하도록 수정
-            if score_match:
-                score = float(score_match.group())  # 정수가 아닌 실수로 변환
-                # 점수 범위 제한
-                score = max(0.0, min(100.0, score))
-                return score
-            else:
-                # 숫자를 찾지 못한 경우 규칙 기반 평가로 대체
-                return self.rule_based_evaluate(spec_data)
-        except:
-            # 오류 발생 시 규칙 기반 평가로 대체
-            return self.rule_based_evaluate(spec_data)
-
-    def rule_based_evaluate(self, spec_data):
-        """규칙 기반 평가 방식 (LLM 평가가 실패할 경우 백업)"""
-        scores = {}
-        
-        # 직무에 따른 가중치 조정
-        job = spec_data.get("desired_job", "일반")
-        weights = self.weights.copy()
-        
-        if job in self.job_weights:
-            for key, adjustment in self.job_weights[job].items():
-                weights[key] = max(0.01, min(0.95, weights[key] + adjustment))  # 가중치가 너무 크거나 작아지지 않도록
-        
-        # 정규화를 위해 가중치 합을 1로 조정
-        total_weight = sum(weights.values())
-        for key in weights:
-            weights[key] /= total_weight
-        # 최종학력 평가 추가
-        final_edu = spec_data.get("final_edu", "")
-        final_status = spec_data.get("final_status", "")
-        final_edu_score = 0
-
-        # 최종학력 기본 점수 설정
-        if "대학원" in final_edu:
-            final_edu_score = 95  # 대학원
-        elif "대학교" in final_edu and not "2_3년제" in final_edu:
-            final_edu_score = 85  # 4년제 대학교
-        elif "2_3년제" in final_edu:
-            final_edu_score = 80  # 2_3년제 대학교
-        elif "고등학교" in final_edu:
-            final_edu_score = 75  # 고등학교
-        elif "중학교" in final_edu:
-            final_edu_score = 65  # 중학교
-        else:
-            final_edu_score = 65  # 기타 학력
-
-        # 학력 상태에 따른 조정
-        if "졸업" in final_status:
-            final_edu_score *= 1.0    # 졸업: 100% 점수
-        elif "수료" in final_status:
-            final_edu_score *= 0.95   # 수료: 95% 점수
-        elif "재학" in final_status:
-            final_edu_score *= 0.9    # 재학: 90% 점수
-        elif "휴학" in final_status:
-            final_edu_score *= 0.85   # 휴학: 85% 점수
-        elif "중퇴" in final_status:
-            final_edu_score *= 0.8    # 중퇴: 80% 점수
-
-        # 직무에 따른 학력 중요도 조정
-        if job == "연구개발·설계":
-            final_edu_score *= 1.2    # 연구개발 분야는 학력 매우 중요
-        elif job == "금융":
-            final_edu_score *= 1.15   # 금융 분야는 학력 중요
-        elif job == "전문·특수직":
-            final_edu_score *= 1.1    # 전문직은 학력 중요
-        elif job == "인터넷·IT":
-            final_edu_score *= 1.05   # IT 분야는 학력 약간 중요
-        elif job == "디자인" or job == "미디어":
-            final_edu_score *= 0.9    # 디자인, 미디어는 학력보다 실무능력 중요
-        elif job == "영업·고객상담":
-            final_edu_score *= 0.85   # 영업은 학력보다 영업력이 중요
-
-        # 점수 상한 설정
-        final_edu_score = min(100, final_edu_score)
-        scores["final_edu"] = final_edu_score
-
-        # 가중치에 final_edu 추가 (기존 가중치 합을 유지하기 위해 다른 가중치 조정)
-        # 기존 가중치 합계
-        original_weight_sum = sum(weights.values())
-        weights["final_edu"] = 0.15
-        scaling_factor = (1 - weights["final_edu"]) / original_weight_sum
-        for key in list(weights.keys()):
-            if key != "final_edu":
-                weights[key] *= scaling_factor
-
-        # 학력 평가
-        uni_score = 0
-        if "universities" in spec_data and spec_data["universities"]:
-            uni_count = len(spec_data["universities"])
-            uni_score = 0
-            for uni in spec_data["universities"]:
-                # 대학 점수 계산
-                school_score = 0
-                school_name = uni.get("school_name", "").lower()
-                
-                # 학교 이름 기반 점수
-                if "서울대" in school_name or "연세대" in school_name or "고려대" in school_name:
-                    school_score = 95
-                elif "서강대" in school_name or "성균관대" in school_name or "한양대" in school_name:
-                    school_score = 90
-                elif "중앙대" in school_name or "경희대" in school_name or "이화여대" in school_name:
-                    school_score = 85
-                elif "대학교" in school_name:
-                    school_score = 80
-                else:
-                    school_score = 75
-                
-                # 학위 가중치
-                degree = uni.get("degree", "")
-                degree_weight = {
-                    "박사": 1.2,
-                    "석사": 1.1,
-                    "학사": 1.0,
-                    "전문학사": 0.9,
-                    "수료": 0.8
-                }.get(degree, 0.8)
-                
-                # GPA 점수 (정규화)
-                gpa = uni.get("gpa", 0)
-                gpa_max = uni.get("gpa_max", 4.5)
-                
-                if gpa and gpa_max:
-                    gpa_score = (gpa / gpa_max) * 100
-                else:
-                    gpa_score = 75  # 기본값
-                
-                # 전공 관련성 (직무별 관련 전공 매핑)
-                major = uni.get("major", "").lower()
-                major_relevance = 1.0  # 기본값
-                
-                # 지원 직무와 전공 관련성
-                if job == "경영·사무":
-                    if "경영" in major or "경제" in major or "회계" in major or "통계" in major:
-                        major_relevance = 1.2
-                    elif "행정" in major or "사무" in major:
-                        major_relevance = 1.1
-                    elif "인문" in major or "사회" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "마케팅·광고·홍보":
-                    if "마케팅" in major or "광고" in major or "홍보" in major or "미디어" in major:
-                        major_relevance = 1.2
-                    elif "경영" in major or "커뮤니케이션" in major or "심리" in major:
-                        major_relevance = 1.1
-                    elif "디자인" in major or "사회" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "무역·유통":
-                    if "무역" in major or "유통" in major or "물류" in major:
-                        major_relevance = 1.2
-                    elif "경영" in major or "경제" in major or "국제" in major:
-                        major_relevance = 1.1
-                    elif "사회" in major or "외국어" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "인터넷·IT":
-                    if "컴퓨터" in major or "소프트웨어" in major or "전산" in major or "정보" in major:
-                        major_relevance = 1.2
-                    elif "전자" in major or "통신" in major:
-                        major_relevance = 1.1
-                    elif "수학" in major or "자연과학" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "생산·제조":
-                    if "기계" in major or "산업" in major or "제조" in major or "생산" in major:
-                        major_relevance = 1.2
-                    elif "공학" in major or "재료" in major:
-                        major_relevance = 1.1
-                    elif "화학" in major or "물리" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "영업·고객상담":
-                    if "영업" in major or "마케팅" in major or "경영" in major:
-                        major_relevance = 1.2
-                    elif "심리" in major or "커뮤니케이션" in major:
-                        major_relevance = 1.1
-                    elif "사회" in major or "인문" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "건설":
-                    if "건축" in major or "토목" in major or "건설" in major:
-                        major_relevance = 1.2
-                    elif "도시" in major or "공학" in major:
-                        major_relevance = 1.1
-                    elif "자연과학" in major or "지리" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "금융":
-                    if "금융" in major or "경제" in major or "경영" in major or "통계" in major:
-                        major_relevance = 1.2
-                    elif "회계" in major or "수학" in major:
-                        major_relevance = 1.1
-                    elif "컴퓨터" in major or "사회" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "연구개발·설계":
-                    if "공학" in major or "자연과학" in major or "연구" in major:
-                        major_relevance = 1.2
-                    elif "수학" in major or "통계" in major:
-                        major_relevance = 1.1
-                    elif "컴퓨터" in major or "기술" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "디자인":
-                    if "디자인" in major or "시각" in major or "산업디자인" in major:
-                        major_relevance = 1.2
-                    elif "미술" in major or "예술" in major:
-                        major_relevance = 1.1
-                    elif "건축" in major or "컴퓨터" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "미디어":
-                    if "미디어" in major or "방송" in major or "언론" in major or "영상" in major:
-                        major_relevance = 1.2
-                    elif "커뮤니케이션" in major or "광고" in major:
-                        major_relevance = 1.1
-                    elif "문학" in major or "사회" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                elif job == "전문·특수직":
-                    if "법학" in major or "의학" in major or "약학" in major or "특수" in major:
-                        major_relevance = 1.2
-                    elif "교육" in major or "심리" in major:
-                        major_relevance = 1.1
-                    elif "사회" in major or "복지" in major:
-                        major_relevance = 1.0
-                    else:
-                        major_relevance = 0.9
-                
-                # 학력 총합 점수
-                uni_item_score = (school_score * 0.4 + gpa_score * 0.3) * degree_weight * major_relevance
-                uni_score += uni_item_score
+            # 다양한 URL 형식 지원
+            if s3_url.startswith('s3://'):
+                # S3 URL을 HTTP URL로 변환 시도
+                s3_url = s3_url.replace('s3://', 'https://')
+                logger.info("S3 URL을 HTTP URL로 변환 시도...")
             
-            # 여러 대학이 있을 경우 평균 내기
-            uni_score = uni_score / uni_count
-        
-        scores["universities"] = uni_score
-        
-        # 경력 평가 - work_month 반영
-        career_score = 0
-        if "careers" in spec_data and spec_data["careers"]:
-            career_count = len(spec_data["careers"])
-            for career in spec_data["careers"]:
-                company = career.get("company", "").lower()
-                role = career.get("role", "").lower()
-
-                # 회사 규모/인지도 점수
-                company_score = 0
-                if "삼성" in company or "네이버" in company or "카카오" in company or "lg" in company:
-                    company_score = 95
-                elif "기업" in company or "그룹" in company or "주식회사" in company:
-                    company_score = 85
-                else:
-                    company_score = 75
-
-                # 역할 점수 및 가중치
-                role_score = 40  # 기본값
-                employment_type_weight = 1.0  # 기본값
-                # 역할 가중치
-                if role == "인턴":
-                    role_score = 75
-                    employment_type_weight = 0.7
-                elif role == "정규직":
-                    role_score = 85
-                    employment_type_weight = 1.0
-                elif role == "대표":
-                    role_score = 95
-                    employment_type_weight = 1.3
-                
-                # 근무 기간 가중치 
-                work_month = career.get("work_month", 0)
-                experience_weight = 1.0  # 기본값
-                
-                # 근무 기간에 따른 가중치 (로그 스케일로 점진적 증가)
-                if work_month:
-                    # 1개월 미만: 0.2, 3개월 미만 0.5, 6개월 미만: 0.8, 6-12개월: 1.0, 12-24개월: 1.2, 24-36개월: 1.3, 36개월 이상: 1.5
-                    if work_month < 1:
-                        experience_weight = 0.2
-                    elif work_month < 3:
-                        experience_weight = 0.5
-                    elif work_month < 6:
-                        experience_weight = 0.8
-                    elif work_month < 12:
-                        experience_weight = 1.0
-                    elif work_month < 24:
-                        experience_weight = 1.2
-                    elif work_month < 36:
-                        experience_weight = 1.3
-                    else:
-                        experience_weight = 1.5
-                
-                # 경력 점수 계산
-                career_item_score = (company_score * 0.4 + role_score * 0.4) * experience_weight * employment_type_weight
-                career_score += career_item_score
-            
-            # 여러 경력이 있을 경우 평균
-            career_score = career_score / career_count
-            # 점수 범위 제한 (0~100)
-            career_score = max(0, min(100, career_score))
-        scores["careers"] = career_score
-        # 자격증 평가
-        cert_score = 0
-        if "certificates" in spec_data and spec_data["certificates"]:
-            cert_count = len(spec_data["certificates"])
-            for cert in spec_data["certificates"]:
-                cert = cert.lower()
-                
-                # 직무 관련 자격증 점수
-                if job == "경영·사무":
-                    if "경영지도사" in cert or "사무" in cert or "행정사" in cert:
-                        cert_score += 95
-                    elif "세무" in cert or "회계" in cert or "컴퓨터활용능력" in cert:
-                        cert_score += 90
-                    elif "엑셀" in cert or "워드" in cert or "정보처리" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "마케팅·광고·홍보":
-                    if "마케팅" in cert or "광고" in cert or "홍보" in cert:
-                        cert_score += 95
-                    elif "사회조사" in cert or "빅데이터" in cert:
-                        cert_score += 90
-                    elif "인터넷" in cert or "통계" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "무역·유통":
-                    if "무역" in cert or "유통" in cert or "물류" in cert or "관세사" in cert:
-                        cert_score += 95
-                    elif "국제" in cert or "수출" in cert:
-                        cert_score += 90
-                    elif "유통" in cert or "무역영어" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "인터넷·IT":
-                    if "정보처리" in cert or "aws" in cert or "데이터베이스" in cert or "cloud" in cert:
-                        cert_score += 95
-                    elif "네트워크" in cert or "보안" in cert:
-                        cert_score += 90
-                    elif "코딩" in cert or "프로그래밍" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "생산·제조":
-                    if "품질" in cert or "생산" in cert or "제조" in cert:
-                        cert_score += 95
-                    elif "안전" in cert or "기계" in cert:
-                        cert_score += 90
-                    elif "전기" in cert or "관리" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "영업·고객상담":
-                    if "영업" in cert or "판매" in cert or "고객" in cert:
-                        cert_score += 95
-                    elif "마케팅" in cert or "cs" in cert:
-                        cert_score += 90
-                    elif "세일즈" in cert or "상담" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "건설":
-                    if "건축" in cert or "토목" in cert or "건설" in cert:
-                        cert_score += 95
-                    elif "안전" in cert or "감리" in cert:
-                        cert_score += 90
-                    elif "설비" in cert or "cad" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "금융":
-                    if "금융" in cert or "증권" in cert or "회계사" in cert or "투자" in cert:
-                        cert_score += 95
-                    elif "은행" in cert or "보험" in cert:
-                        cert_score += 90
-                    elif "재무" in cert or "펀드" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "연구개발·설계":
-                    if "기술사" in cert or "연구" in cert or "설계" in cert:
-                        cert_score += 95
-                    elif "기사" in cert or "r&d" in cert:
-                        cert_score += 90
-                    elif "cad" in cert or "분석" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "디자인":
-                    if "디자인" in cert or "그래픽" in cert or "ui" in cert:
-                        cert_score += 95
-                    elif "포토샵" in cert or "일러스트" in cert:
-                        cert_score += 90
-                    elif "멀티미디어" in cert or "웹" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                # 미디어 분야 자격증 평가 계속
-                elif job == "미디어":
-                    if "방송" in cert or "미디어" in cert or "언론" in cert:
-                        cert_score += 95
-                    elif "영상" in cert or "촬영" in cert:
-                        cert_score += 90
-                    elif "편집" in cert or "작가" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                elif job == "전문·특수직":
-                    if "변호사" in cert or "의사" in cert or "약사" in cert or "회계사" in cert:
-                        cert_score += 95
-                    elif "세무사" in cert or "교사" in cert:
-                        cert_score += 90
-                    elif "상담사" in cert or "공인" in cert:
-                        cert_score += 85
-                    else:
-                        cert_score += 75
-                
-                else:  # 기타 직종
-                    cert_score += 80  # 기본 점수
-            
-            # 자격증 평균 점수
-            cert_score = cert_score / cert_count
-        
-        scores["certificates"] = cert_score
-        
-        # 어학 능력 평가
-        lang_score = 0
-        if "languages" in spec_data and spec_data["languages"]:
-            lang_count = len(spec_data["languages"])
-            for lang in spec_data["languages"]:
-                test = lang.get("test", "").upper()
-                score_or_grade = lang.get("score_or_grade", "")
-                
-                # 각 시험별 점수 평가
-                test_score = 0
-                if test == "TOEIC":
-                    try:
-                        toeic_score = float(score_or_grade)
-                        if toeic_score >= 900:
-                            test_score = 95
-                        elif toeic_score >= 800:
-                            test_score = 90
-                        elif toeic_score >= 700:
-                            test_score = 85
-                        elif toeic_score >= 600:
-                            test_score = 80
-                        else:
-                            test_score = 75
-                    except:
-                        test_score = 75
-                
-                elif test == "TOEFL":
-                    try:
-                        toefl_score = float(score_or_grade)
-                        if toefl_score >= 100:
-                            test_score = 95
-                        elif toefl_score >= 90:
-                            test_score = 90
-                        elif toefl_score >= 80:
-                            test_score = 85
-                        elif toefl_score >= 70:
-                            test_score = 80
-                        else:
-                            test_score = 75
-                    except:
-                        test_score = 75
-                
-                elif test == "OPIC":
-                    grade_map = {
-                        "AL": 95, "IH": 90, "IM3": 85, "IM2": 80, 
-                        "IM1": 75, "IL": 70, "NH": 65, "NM": 60, "NL": 55
-                    }
-                    test_score = grade_map.get(score_or_grade, 75)
-                
-                else:  # 기타 어학 시험
-                    test_score = 80  # 기본 점수
-                
-                # 직무별 어학 중요도 가중치 부여
-                job_lang_weight = 1.0
-                
-                if job == "무역·유통":
-                    job_lang_weight = 1.3  # 무역은 외국어 매우 중요
-                elif job == "영업·고객상담":
-                    job_lang_weight = 1.2  # 글로벌 고객 응대 가능성
-                elif job == "마케팅·광고·홍보" or job == "금융" or job == "미디어":
-                    job_lang_weight = 1.1  # 약간 중요
-                elif job == "생산·제조" or job == "건설":
-                    job_lang_weight = 0.9  # 약간 덜 중요
-                
-                lang_score += test_score * job_lang_weight
-            
-            # 어학 평균 점수
-            lang_score = lang_score / lang_count
-        
-        scores["languages"] = lang_score
-        
-        # 활동 평가
-        activity_score = 0
-        if "activities" in spec_data and spec_data["activities"]:
-            activity_count = len(spec_data["activities"])
-            for activity in spec_data["activities"]:
-                name = activity.get("name", "").lower()
-                role = activity.get("role", "").lower()
-                award = activity.get("award", "").lower()
-                
-                # 활동 점수 계산
-                activity_item_score = 0
-                
-                # 역할 가중치
-                role_weight = 1.0
-                if "회장" in role or "대표" in role:
-                    role_weight = 1.2
-                elif "임원" in role or "팀장" in role:
-                    role_weight = 1.1
-                elif "부원" in role or "사원" in role:
-                    role_weight = 0.9
-                
-                # 수상 가중치
-                award_weight = 1.0
-                if award:
-                    if "대상" in award or "금상" in award:
-                        award_weight = 1.3
-                    elif "은상" in award or "우수상" in award:
-                        award_weight = 1.2
-                    elif "동상" in award or "장려상" in award:
-                        award_weight = 1.1
-                
-                # 직무 관련성 점수
-                relevance_score = 0
-                
-                if job == "경영·사무":
-                    if "경영" in name or "기획" in name or "창업" in name:
-                        relevance_score = 95
-                    elif "행정" in name or "사무" in name:
-                        relevance_score = 90
-                    elif "경제" in name or "회계" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "마케팅·광고·홍보":
-                    if "마케팅" in name or "광고" in name or "홍보" in name:
-                        relevance_score = 95
-                    elif "브랜드" in name or "기획" in name:
-                        relevance_score = 90
-                    elif "디자인" in name or "sns" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "무역·유통":
-                    if "무역" in name or "유통" in name or "국제" in name:
-                        relevance_score = 95
-                    elif "비즈니스" in name or "교류" in name:
-                        relevance_score = 90
-                    elif "외국어" in name or "경제" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "인터넷·IT":
-                    if "개발" in name or "코딩" in name or "프로그래밍" in name or "해커톤" in name:
-                        relevance_score = 95
-                    elif "전산" in name or "컴퓨터" in name or "it" in name:
-                        relevance_score = 90
-                    elif "소프트웨어" in name or "스타트업" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "생산·제조":
-                    if "생산" in name or "제조" in name or "공정" in name:
-                        relevance_score = 95
-                    elif "품질" in name or "관리" in name:
-                        relevance_score = 90
-                    elif "공학" in name or "설계" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "영업·고객상담":
-                    if "영업" in name or "세일즈" in name or "판매" in name:
-                        relevance_score = 95
-                    elif "고객" in name or "상담" in name:
-                        relevance_score = 90
-                    elif "서비스" in name or "마케팅" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "건설":
-                    if "건설" in name or "건축" in name or "토목" in name:
-                        relevance_score = 95
-                    elif "설계" in name or "감리" in name:
-                        relevance_score = 90
-                    elif "공학" in name or "안전" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "금융":
-                    if "금융" in name or "투자" in name or "경제" in name:
-                        relevance_score = 95
-                    elif "회계" in name or "재무" in name:
-                        relevance_score = 90
-                    elif "증권" in name or "은행" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "연구개발·설계":
-                    if "연구" in name or "개발" in name or "r&d" in name:
-                        relevance_score = 95
-                    elif "설계" in name or "분석" in name:
-                        relevance_score = 90
-                    elif "과학" in name or "공학" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "디자인":
-                    if "디자인" in name or "창작" in name or "미술" in name:
-                        relevance_score = 95
-                    elif "시각" in name or "ui" in name:
-                        relevance_score = 90
-                    elif "그래픽" in name or "편집" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "미디어":
-                    if "미디어" in name or "방송" in name or "언론" in name:
-                        relevance_score = 95
-                    elif "영상" in name or "기자" in name:
-                        relevance_score = 90
-                    elif "촬영" in name or "편집" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                elif job == "전문·특수직":
-                    if "법률" in name or "의료" in name or "전문" in name:
-                        relevance_score = 95
-                    elif "교육" in name or "연구" in name:
-                        relevance_score = 90
-                    elif "상담" in name or "봉사" in name:
-                        relevance_score = 85
-                    else:
-                        relevance_score = 75
-                
-                else:  # 기타 직종
-                    relevance_score = 80  # 기본 점수
-                
-                # 활동 총 점수
-                activity_item_score = relevance_score * role_weight * award_weight
-                activity_score += activity_item_score
-            
-            # 활동 평균 점수
-            activity_score = activity_score / activity_count
-        
-        scores["activities"] = activity_score
-        
-        # 종합 점수 계산
-        total_score = 0
-        for key, score in scores.items():
-            if score > 0:  # 점수가 있는 항목만 계산
-                total_score += score * weights.get(key, 0.1)
-        
-        # 만약 모든 항목이 0점이면 기본 점수 반환
-        if total_score == 0:
-            total_score = 40
-        
-        # 점수 정규화 (좀 더 넓은 구간으로 분산)
-        total_score = self.min_score + (total_score / 100) * (self.max_score - self.min_score)
-        
-        # 포트폴리오 보너스 점수 (V2 API의 filelink가 있는 경우)
-        if "filelink" in spec_data and spec_data["filelink"]:
-            portfolio_bonus = 3  # 포트폴리오 제출 시 3점 추가
-            total_score = min(self.max_score, total_score + portfolio_bonus)
-        
-        # 소수점 2자리까지 반환 (반올림하지 않고 소수점 유지)
-        return round(total_score, 2)
-
-    def predict(self, spec_data):
-        """스펙 정보를 받아 평가 결과 반환 (캐싱 적용)"""
-        try:
-            # 캐시 키 생성
-            cache_key = self.generate_cache_key(spec_data)
-            
-            # 캐시에서 결과 조회
-            cached_result = self.get_from_cache(cache_key)
-            if cached_result:
-                self.cache_hits += 1
-                print(f"캐시 적중! (총 {self.cache_hits}번 적중)")
-                return cached_result
-            
-            self.cache_misses += 1
-            print(f"캐시 미스 (총 {self.cache_misses}번 미스)")
-            
-            # JSON 문자열로 변환하여 캐시 가능한 형태로 만듦
-            spec_data_json = json.dumps(spec_data, sort_keys=True)
-            # 프롬프트 생성
-            prompt = self.prepare_prompt(spec_data)
-            
-            # 시작 시간 기록
-            start_time = time.time()
-            
-            # LLM으로 평가 - spec_data도 함께 전달
-            score = self.evaluate_with_llm(prompt, spec_data)
-            
-            # 소요 시간 계산
-            elapsed_time = time.time() - start_time
-            print(f"모델 추론 시간: {elapsed_time:.2f}초")
-            
-            # 결과 생성 - 소수점 2자리 유지
-            result = {
-                "nickname": spec_data.get("nickname", "이름 없음"),
-                "totalScore": score
+            # HTTP 요청으로 파일 다운로드
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
             
-            # 결과 캐싱
-            self.save_to_cache(cache_key, result)
+            response = requests.get(s3_url, headers=headers, timeout=30, stream=True)
+            response.raise_for_status()
             
-            return result
+            # 파일 크기 확인
+            content_length = response.headers.get('content-length')
+            if content_length:
+                file_size = int(content_length)
+                if file_size > 50 * 1024 * 1024:  # 50MB 제한
+                    raise ValueError("파일이 너무 큽니다. 50MB 이하의 파일만 지원됩니다.")
+            
+            # 파일 다운로드
+            pdf_data = response.content
+            
+            if not pdf_data:
+                raise ValueError("빈 파일입니다.")
+            
+            logger.info(f"S3 URL에서 파일 다운로드 완료: {len(pdf_data)} bytes")
+            return pdf_data
+            
+        except requests.exceptions.Timeout:
+            logger.error("파일 다운로드 시간 초과")
+            raise ValueError("파일 다운로드 시간이 초과되었습니다.")
+        except requests.exceptions.ConnectionError:
+            logger.error("네트워크 연결 오류")
+            raise ValueError("네트워크 연결에 실패했습니다.")
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP 오류: {e}")
+            if e.response.status_code == 404:
+                raise ValueError("파일을 찾을 수 없습니다.")
+            elif e.response.status_code == 403:
+                raise ValueError("파일에 접근할 수 없습니다. 파일이 공개되어 있는지 확인해주세요.")
+            else:
+                raise ValueError(f"파일 다운로드 중 오류가 발생했습니다: {e}")
         except Exception as e:
-            print(f"평가 중 오류 발생: {e}")
-            # 오류 발생 시 규칙 기반 평가로 대체
-            score = self.rule_based_evaluate(spec_data)
-            return {
-                "nickname": spec_data.get("nickname", "이름 없음"),
-                "totalScore": score
-            }
+            logger.error(f"파일 다운로드 중 예상치 못한 오류: {e}")
+            raise ValueError(f"파일 다운로드 중 오류가 발생했습니다: {e}")
+
+    def process_pdf_from_url(self, s3_url: str) -> List[str]:
+        """URL에서 PDF 처리 - 개선된 버전"""
+        logger.info(f"URL에서 PDF 처리 시작: {s3_url}")
         
-    def get_cache_stats(self):
-        """캐시 통계 정보 반환"""
-        total_requests = self.cache_hits + self.cache_misses
-        hit_rate = (self.cache_hits / total_requests) * 100 if total_requests > 0 else 0
+        try:
+            # 파일 다운로드
+            pdf_data = self.download_from_s3_url(s3_url)
+            
+            # PDF 처리
+            logger.info("PDF 텍스트 추출 시작...")
+            results = self.process_pdf(pdf_data)
+            
+            if not results:
+                logger.warning("PDF에서 텍스트를 추출할 수 없습니다.")
+                return []
+            
+            logger.info(f"PDF 텍스트 추출 완료: {len(results)} 라인")
+            return results
+            
+        except Exception as e:
+            logger.error(f"PDF 처리 중 오류 발생: {e}")
+            raise ValueError(f"PDF 처리 중 오류가 발생했습니다: {e}")
+
+    def process_pdf(self, pdf_data: bytes) -> List[str]:
+        """PDF 파일 처리 및 텍스트 추출 - PDF 텍스트 직접 추출 방식"""
+        try:
+            # PDF 파일 열기
+            pdf_document = fitz.open(stream=pdf_data, filetype="pdf")
+            results = []
+            
+            logger.info("=== PDF 텍스트 직접 추출 시작 ===")
+            
+            # 각 페이지에서 텍스트 직접 추출
+            for page_num in range(len(pdf_document)):
+                logger.info(f"페이지 {page_num + 1} 텍스트 추출 중...")
+                page = pdf_document[page_num]
+                pdf_text = page.get_text()
+                
+                if pdf_text.strip():
+                    # 텍스트를 라인별로 분리
+                    lines = pdf_text.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if line and len(line) > 2:
+                            # 개인정보가 아닌 경우만 추가
+                            if not self.is_personal_info(line):
+                                # 텍스트 정제
+                                cleaned_line = self.clean_pdf_text(line)
+                                if cleaned_line and not self.is_personal_info(cleaned_line):
+                                    results.append(cleaned_line)
+                                    logger.info(f"추출된 텍스트: {cleaned_line}")
+                                else:
+                                    logger.info(f"개인정보로 필터링됨: {line}")
+                            else:
+                                logger.info(f"개인정보로 필터링됨: {line}")
+            
+            logger.info(f"총 {len(results)}개의 텍스트 라인 추출됨")
+            return results
+            
+        except Exception as e:
+            logger.error(f"PDF 처리 실패: {str(e)}")
+            raise e
+
+    def clean_pdf_text(self, text: str) -> str:
+        """PDF 텍스트 정제"""
+        try:
+            # 불필요한 공백 제거
+            text = re.sub(r'\s+', ' ', text)
+            text = text.strip()
+            
+            # 빈 문자열이거나 너무 짧은 경우 제외
+            if not text or len(text) < 2:
+                return ""
+            
+            # 특수문자 정제 (의미있는 특수문자는 유지)
+            text = re.sub(r'[^\w\s가-힣\-\.\,\/\(\)\~]', '', text)
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"텍스트 정제 실패: {str(e)}")
+            return text
+
+    def is_personal_info(self, text: str) -> bool:
+        """개인정보인지 확인 - 더 엄격하게 수정"""
+        personal_patterns = [
+            # 이름/닉네임 패턴만 필터링
+            r'^[가-힣]{2,4}입니다$',
+            r'^[가-힣]{2,4}입니다\.$',
+            r'^[가-힣]{2,4}\s*입니다$',
+            r'^[가-힣]{2,4}\s*입니다\.$',
+            r'^저는[가-힣]{2,4}입니다\.?$',
+            r'^[가-힣]{2,4}이라고\s*합니다\.?$',
+            r'^안녕하세요[가-힣]*입니다\.?$',
+            
+            # 지원자 관련 패턴
+            r'^지원자$',
+            r'^지질줄모르는지원자$',
+            
+            # 연락처 정보
+            r'^[0-9]{3}-[0-9]{4}-[0-9]{4}$',
+            r'^[0-9]{11}$',
+            r'^[0-9]{2,3}-[0-9]{3,4}-[0-9]{4}$',
+            r'^[0-9]{3}\.[0-9]{4}\.[0-9]{4}$',
+            
+            # 이메일 패턴
+            r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+            
+            # 생년월일 관련
+            r'^[0-9]{8}만[0-9]{1,2}세$',
+            r'^[0-9]{4}년\s*[0-9]{1,2}월\s*[0-9]{1,2}일$',
+            r'^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
+            r'^만\s*[0-9]{1,2}세$',
+            r'^[0-9]{1,2}세$',
+            
+            # 주소 정보 (개인 주소만)
+            r'^[가-힣\s]+시[가-힣\s]+구[가-힣\s]+동[0-9-]+$',
+            r'^[가-힣\s]+아파트[0-9-]+동[0-9-]+호$',
+            
+            # 섹션 제목 (개인정보 관련만)
+            r'^Persoona1\s*1nformation$',
+            r'^Personal\s*Information$',
+            r'^기본사항$',
+            r'^개인정보$',
+            r'^인적사항$',
+        ]
         
-        return {
-            "cache_hits": self.cache_hits,
-            "cache_misses": self.cache_misses,
-            "total_requests": total_requests,
-            "hit_rate_percent": round(hit_rate, 2)
+        for pattern in personal_patterns:
+            if re.match(pattern, text.strip()):
+                return True
+        return False
+
+    def is_section_header(self, text: str) -> Optional[str]:
+        """섹션 헤더 판별"""
+        # 섹션 헤더 패턴
+        section_patterns = {
+            "학력": r'^(학력|학적|교육|학업|교육이력|학력사항|교육사항)$',
+            "경력": r'^(경력|경험|직장|직무|업무|근무|경력사항|직장경력)$',
+            "자격증": r'^(자격|자격증|면허|자격/면허|자격사항)$',
+            "어학": r'^(어학|외국어|언어|어학능력|외국어능력)$',
+            "활동": r'^(활동|대외활동|교내활동|봉사|동아리|프로젝트)$',
+            "희망직무": r'^(희망직무|희망직종|희망분야|희망근무|희망업종|희망업무|희망진로|희망근무지)$'
         }
+        
+        # 텍스트 정규화
+        text = text.strip()
+        
+        # 각 패턴 확인
+        for section, pattern in section_patterns.items():
+            if re.search(pattern, text, re.IGNORECASE):
+                logger.info(f"Found section header: {section} from text: {text}")
+                return section
+        return None
+
+    def extract_desired_job(self, text: str) -> str:
+        """희망 직무 추출"""
+        # 희망 직무 키워드 패턴
+        job_patterns = [
+            r'희망[직무|직종|분야|업종|업무][\s:]*([\w\s·/]+)',
+            r'[희망|원하는][\s]*(직무|직종|분야|업종|업무)[\s:]*([\w\s·/]+)',
+            r'(인터넷[_·/]?IT|웹개발|앱개발|서버|백엔드|프론트엔드|풀스택|소프트웨어|시스템|네트워크|보안|데이터|AI|인공지능|기획|디자인|마케팅|영업|인사|총무|재무|회계)'
+        ]
+        
+        for pattern in job_patterns:
+            match = re.search(pattern, text)
+            if match:
+                # 그룹이 2개인 패턴의 경우 두 번째 그룹 사용
+                job = match.group(2) if len(match.groups()) > 1 else match.group(1)
+                # 정규화
+                job = re.sub(r'[_·/]', '/', job)
+                logger.info(f"Found desired job: {job}")
+                return job.strip()
+        return ""
+
+    def process_section(self, section: str, texts: List[str], result: Dict, patterns: Dict):
+        """섹션 처리"""
+        logger.info(f"Processing section: {section} with {len(texts)} texts")
+        
+        if section == "학력":
+            self.process_education(texts, result, patterns)
+        elif section == "경력":
+            self.process_career(texts, result, patterns)
+        elif section == "자격증":
+            self.process_certificates(texts, result, patterns)
+        elif section == "어학":
+            self.process_languages(texts, result, patterns)
+        elif section == "활동":
+            self.process_activities(texts, result, patterns)
+        elif section == "희망직무":
+            result["desired_job"] = self.extract_desired_job(" ".join(texts))
+            logger.info(f"Set desired job: {result['desired_job']}")
+
+    def parse_resume(self, ocr_results: List[str]) -> Dict:
+        """이력서 파싱 - OCR 결과를 구조화된 데이터로 변환"""
+        result = {
+            "nickname": "임솔",  # 기본 닉네임 설정
+            "universities": [],
+            "careers": [],
+            "certificates": [],
+            "languages": [],
+            "activities": [],
+            "skills": [],
+            "awards": [],
+            "introduction": ""
+        }
+
+        # OCR 결과를 하나의 텍스트로 합치기
+        full_text = "\n".join(ocr_results) if isinstance(ocr_results, list) else str(ocr_results)
+        
+        # 디버그: OCR 결과 로깅
+        logger.info("=== OCR 결과 ===")
+        logger.info(full_text)
+        logger.info("=== OCR 결과 끝 ===")
+        
+        # 텍스트를 줄 단위로 분리
+        lines = full_text.split('\n')
+        
+        # 범용적 파싱 로직
+        self.extract_education_direct(lines, result)
+        self.extract_career_direct(lines, result)
+        self.extract_certificate_direct(lines, result)
+        self.extract_language_direct(lines, result)
+        self.extract_activity_direct(lines, result)
+        self.extract_skill_direct(lines, result)
+        
+        # 디버그: 파싱 결과 로깅
+        logger.info("=== 파싱 결과 ===")
+        logger.info(f"Nickname: {result.get('nickname', '')}")
+        logger.info(f"Universities: {result.get('universities', [])}")
+        logger.info(f"Careers: {result.get('careers', [])}")
+        logger.info(f"Certificates: {result.get('certificates', [])}")
+        logger.info(f"Languages: {result.get('languages', [])}")
+        logger.info(f"Activities: {result.get('activities', [])}")
+        logger.info("=== 파싱 결과 끝 ===")
+        
+        return result
+
+    def extract_education_direct(self, lines: List[str], result: Dict):
+        """직접적 학력 정보 추출 - 개선된 버전"""
+        logger.info("\n=== 학력 정보 추출 시작 ===")
+        
+        # 전체 텍스트를 하나로 합쳐서 검색
+        full_text = " ".join(lines)
+        logger.info(f"전체 텍스트에서 학력 검색: {full_text[:200]}...")
+        
+        # 대학교 패턴 검색 (전체 텍스트에서) - 더 포괄적인 패턴 추가
+        university_patterns = [
+            r'([가-힣]+대학교)',
+            r'([가-힣]+대학)',
+            r'([가-힣]+전문대학)',
+            r'([가-힣]+컬리지)',
+            r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지|college|university))',
+            r'([가-힣a-zA-Z\s]+(?:대학교|대학))',
+            r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학))',
+            r'([가-힣a-zA-Z\s]+(?:대학교|대학|전문대학|컬리지))',
+            # 영문 패턴
+            r'([a-zA-Z\s]+(?:University|College|Institute))',
+            r'([a-zA-Z\s]+(?:Univ|Coll|Inst))'
+        ]
+        
+        found_universities = []
+        for pattern in university_patterns:
+            matches = re.findall(pattern, full_text)
+            for match in matches:
+                school_name = match.strip()
+                if school_name and school_name not in found_universities:
+                    # 고등학교 제외
+                    if '고등학교' not in school_name and '고등' not in school_name:
+                        found_universities.append(school_name)
+                        logger.info(f"대학교 발견: {school_name}")
+        
+        # 각 대학교에 대해 정보 추출
+        for school_name in found_universities:
+            # 학위 확인
+            degree = "학사"
+            if any(keyword in full_text for keyword in ['석사', '대학원', 'master', 'Master']):
+                degree = "석사"
+            elif any(keyword in full_text for keyword in ['박사', 'doctor', 'Doctor', 'PhD']):
+                degree = "박사"
+            elif any(keyword in full_text for keyword in ['전문학사', 'associate', 'Associate']):
+                degree = "전문학사"
+            
+            # 전공 확인 - 더 정확한 패턴 매칭
+            major = ""
+            major_patterns = [
+                r'([가-힣a-zA-Z\s]+(?:학과|전공))',
+                r'([가-힣a-zA-Z\s]+(?:학과|전공))\s*[ㅣ|]\s*[가-힣]+',  # "경영학과 ㅣ수원" 형태
+                r'([가-힣]+학과)',  # 더 구체적인 패턴
+                r'([가-힣]+전공)',
+                r'([a-zA-Z\s]+(?:Major|Department))'
+            ]
+            
+            for pattern in major_patterns:
+                match = re.search(pattern, full_text)
+                if match:
+                    major = match.group(1).strip()
+                    # 학교명이 포함된 경우 제거
+                    major = re.sub(r'^[가-힣]{2,4}\s+', '', major)
+                    # 숫자 제거
+                    major = re.sub(r'\s*\d+\s*$', '', major)
+                    # 특수문자 제거
+                    major = re.sub(r'[ㅣ|]', '', major)
+                    major = major.strip()
+                    if major:  # 빈 문자열이 아닌 경우만 사용
+                        break
+            
+            # 학점(GPA) 추출
+            gpa = 0.0
+            gpa_max = 4.5
+            
+            # 학점 추출 패턴들 (더 포괄적으로)
+            gpa_patterns = [
+                # 기본 GPA 패턴
+                r'GPA\s*:\s*([0-9.]+)',
+                r'학점\s*:\s*([0-9.]+)',
+                r'평점\s*:\s*([0-9.]+)',
+                r'성적\s*:\s*([0-9.]+)',
+                
+                # 분수 형태 (3.5/4.5, 3.8/4.3 등)
+                r'([0-9.]+)\s*\/\s*([0-9.]+)',
+                r'([0-9.]+)\s*\/\s*([0-9.]+)\s*점',
+                r'([0-9.]+)\s*\/\s*([0-9.]+)\s*\(만점\)',
+                
+                # 점수 형태 (3.5점, 3.8점 등)
+                r'([0-9.]+)\s*점',
+                r'([0-9.]+)\s*\(만점\s*([0-9.]+)\)',
+                
+                # 괄호 형태 (3.5 (4.5만점))
+                r'([0-9.]+)\s*\(([0-9.]+)\s*만점\)',
+                r'([0-9.]+)\s*\(만점\s*([0-9.]+)\)',
+                
+                # 콜론 형태 (학점: 3.5/4.5)
+                r'학점\s*:\s*([0-9.]+)\s*\/\s*([0-9.]+)',
+                r'평점\s*:\s*([0-9.]+)\s*\/\s*([0-9.]+)',
+                r'GPA\s*:\s*([0-9.]+)\s*\/\s*([0-9.]+)',
+            ]
+            
+            # 만점만 따로 추출하는 패턴들
+            max_score_patterns = [
+                r'만점\s*([0-9.]+)',
+                r'\(만점\s*([0-9.]+)\)',
+                r'([0-9.]+)\s*만점',
+                r'최고점\s*([0-9.]+)',
+                r'최대점수\s*([0-9.]+)'
+            ]
+            
+            # 먼저 만점만 추출
+            for pattern in max_score_patterns:
+                match = re.search(pattern, full_text)
+                if match:
+                    potential_max = float(match.group(1))
+                    # 일반적인 만점 값들만 허용 (4.0, 4.3, 4.5)
+                    if potential_max in [4.0, 4.3, 4.5]:
+                        gpa_max = potential_max
+                        logger.info(f"만점 추출: {gpa_max}")
+                        break
+            
+            # 학점 추출
+            for pattern in gpa_patterns:
+                match = re.search(pattern, full_text)
+                if match:
+                    if len(match.groups()) == 1:
+                        potential_gpa = float(match.group(1))
+                        # 학점 유효성 검사 (0.0 ~ 4.5 범위, 날짜 형태 제외)
+                        if self.is_valid_gpa(potential_gpa):
+                            gpa = potential_gpa
+                            # 만점이 아직 설정되지 않았다면 기본값 4.5 사용
+                            if gpa_max == 4.5:
+                                logger.info(f"학점 추출: {gpa}/{gpa_max} (기본 만점)")
+                            else:
+                                logger.info(f"학점 추출: {gpa}/{gpa_max}")
+                    elif len(match.groups()) == 2:
+                        potential_gpa = float(match.group(1))
+                        potential_max = float(match.group(2))
+                        
+                        # 학점과 만점 모두 유효성 검사
+                        if self.is_valid_gpa(potential_gpa) and potential_max in [4.0, 4.3, 4.5]:
+                            gpa = potential_gpa
+                            gpa_max = potential_max
+                            logger.info(f"학점 추출: {gpa}/{gpa_max}")
+                    break
+            
+            # 학점이 추출되었지만 만점이 기본값인 경우, 텍스트에서 만점 정보 재검색
+            if gpa > 0 and gpa_max == 4.5:
+                # 더 넓은 범위에서 만점 검색
+                for pattern in max_score_patterns:
+                    match = re.search(pattern, full_text)
+                    if match:
+                        potential_max = float(match.group(1))
+                        if potential_max in [4.0, 4.3, 4.5]:
+                            gpa_max = potential_max
+                            logger.info(f"추가 만점 검색 결과: {gpa_max}")
+                            break
+            
+            # 학점이 유효하지 않으면 0으로 설정 (나중에 "-"로 표시)
+            if not self.is_valid_gpa(gpa):
+                gpa = 0.0
+                logger.info("유효하지 않은 학점 값으로 인해 0으로 설정")
+            
+            # 졸업 상태 확인 - 더 정확한 패턴 매칭
+            status = "졸업"  # 기본값
+            status_keywords = {
+                '졸업': ['졸업', 'graduate', 'completed', '졸업자', '졸업예정', '졸업생'],
+                '중퇴': ['중퇴', '중도퇴학', 'dropout', 'withdrawn', '중퇴자', '자퇴', '자퇴자'],
+                '수료': ['수료', '수료자', 'coursework', 'completed_course', '수료예정'],
+                '휴학': ['휴학', '휴학중', 'leave', 'suspended', '휴학자', '휴학생'],
+                '재학': ['재학', '재학중', '학생', 'enrolled', 'current', '재학자', '재학생', '학부생', '대학생']
+            }
+            
+            # 전체 텍스트에서 졸업 상태 키워드 검색
+            for status_text, keywords in status_keywords.items():
+                if any(keyword in full_text for keyword in keywords):
+                    status = status_text
+                    logger.info(f"졸업 상태 발견: {status_text}")
+                    break
+            
+            # 중복 확인 및 우선순위 처리
+            existing_schools = [uni["school_name"] for uni in result["universities"]]
+            
+            # 중복된 학교명 처리 (예: "수원대학교"와 "수원대학")
+            is_duplicate = False
+            for existing_school in existing_schools:
+                # 한 학교명이 다른 학교명에 포함되는 경우 (예: "수원대학교"와 "수원대학")
+                if school_name in existing_school or existing_school in school_name:
+                    # 더 긴 이름을 우선 (예: "수원대학교" > "수원대학")
+                    if len(school_name) > len(existing_school):
+                        # 기존 항목 제거하고 새로운 항목으로 교체
+                        result["universities"] = [uni for uni in result["universities"] if uni["school_name"] != existing_school]
+                        is_duplicate = False
+                        break
+                    else:
+                        is_duplicate = True
+                        break
+            
+            if not is_duplicate and school_name not in existing_schools:
+                university_data = {
+                    "school_name": school_name,
+                    "degree": degree,
+                    "major": major,
+                    "status": status,
+                    "gpa": gpa,
+                    "gpa_max": gpa_max
+                }
+                
+                result["universities"].append(university_data)
+                logger.info(f"학력 정보 추출: {school_name} - {degree} - {major} - {status} - GPA: {gpa}/{gpa_max}")
+        
+        # 최종학력 정보 설정
+        if result["universities"]:
+            # 가장 높은 학위 찾기
+            degree_priority = {
+                "박사": 4,
+                "석사": 3,
+                "학사": 2,
+                "전문학사": 1,
+                "": 0
+            }
+            
+            highest_degree = max(result["universities"], 
+                               key=lambda x: degree_priority.get(x.get("degree", ""), 0))
+            
+            logger.info("\n최종학력 정보:")
+            # 최종학력 설정 - 학위에 따른 교육 수준 사용
+            degree = highest_degree.get("degree", "")
+            if degree == "박사" or degree == "석사":
+                result["final_edu"] = "대학원"
+                logger.info(f"  최종학력: {result['final_edu']} (학위: {degree})")
+            elif degree == "학사" or degree == "전문학사":
+                result["final_edu"] = "대학교"
+                logger.info(f"  최종학력: {result['final_edu']} (학위: {degree})")
+            else:
+                result["final_edu"] = "고등학교"  # 기본값
+                logger.info(f"  최종학력: {result['final_edu']} (기본값)")
+            
+            # 최종상태 설정
+            if highest_degree["status"]:
+                result["final_status"] = highest_degree["status"]
+                logger.info(f"  최종상태: {result['final_status']}")
+            else:
+                result["final_status"] = "졸업"  # 기본값
+                logger.info(f"  최종상태: {result['final_status']} (기본값)")
+        else:
+            # 대학 정보가 없는 경우
+            result["final_edu"] = "고등학교"
+            result["final_status"] = "졸업"
+            logger.info("대학 정보 없음, 기본값 설정")
+        
+        logger.info("=== 학력 정보 추출 완료 ===\n")
+
+    def extract_language_direct(self, lines: List[str], result: Dict):
+        """직접적 어학 정보 추출"""
+        logger.info("\n=== 어학 정보 추출 시작 ===")
+        current_language = None
+        
+        # 어학 관련 키워드
+        language_keywords = {
+            'test': [
+                'TOEIC', 'TOEFL', 'TEPS', 'IELTS', 'TOEIC Speaking',
+                'OPIc', 'JLPT', 'JPT', 'HSK', 'TOPIK',
+                '토익', '토플', '텝스', '아이엘츠', '토익스피킹',
+                '오픽', '일본어능력시험', '중국어능력시험', '한국어능력시험',
+                # 추가 패턴
+                'TOEIC Speaking', 'TOEIC Writing', 'TOEIC Listening', 'TOEIC Reading',
+                'TOEFL iBT', 'TOEFL PBT', 'TOEFL CBT',
+                'TEPS', 'TEPS Speaking', 'TEPS Writing',
+                'IELTS Academic', 'IELTS General', 'IELTS Speaking', 'IELTS Writing',
+                'OPIC', 'OPIc', 'OPI',
+                'JLPT N1', 'JLPT N2', 'JLPT N3', 'JLPT N4', 'JLPT N5',
+                'JPT', 'JPT A', 'JPT B', 'JPT C',
+                'HSK 1', 'HSK 2', 'HSK 3', 'HSK 4', 'HSK 5', 'HSK 6',
+                'TOPIK 1', 'TOPIK 2', 'TOPIK 3', 'TOPIK 4', 'TOPIK 5', 'TOPIK 6',
+                # 한글 패턴
+                '토익스피킹', '토익라이팅', '토익리스닝', '토익리딩',
+                '토플아이비티', '토플피비티', '토플시비티',
+                '텝스스피킹', '텝스라이팅',
+                '아이엘츠아카데믹', '아이엘츠제너럴', '아이엘츠스피킹', '아이엘츠라이팅',
+                '오픽', '오피시', '오피',
+                '일본어능력시험1급', '일본어능력시험2급', '일본어능력시험3급', '일본어능력시험4급', '일본어능력시험5급',
+                '중국어능력시험1급', '중국어능력시험2급', '중국어능력시험3급', '중국어능력시험4급', '중국어능력시험5급', '중국어능력시험6급',
+                '한국어능력시험1급', '한국어능력시험2급', '한국어능력시험3급', '한국어능력시험4급', '한국어능력시험5급', '한국어능력시험6급'
+            ],
+            'grade': ['A+', 'A', 'B+', 'B', 'C+', 'C', 'IH', 'IM3', 'IM2', 'IM1', 'IL', 'NH', 'NM', 'NL']
+        }
+        
+        logger.info(f"총 {len(lines)}개 라인에서 어학 정보 검색 중...")
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            logger.info(f"어학 검색 중 라인 {i+1}: {line}")
+            
+            # 시험명 추출
+            test_match = None
+            for test in language_keywords['test']:
+                if test.lower() in line.lower():
+                    test_match = test
+                    logger.info(f"어학 시험 발견: {test_match}")
+                    break
+            
+            if test_match:
+                # 이전 언어 정보가 있으면 저장
+                if current_language:
+                    result["languages"].append(current_language)
+                    logger.info(f"이전 어학 정보 저장: {current_language}")
+                
+                # 새로운 언어 정보 시작
+                current_language = {
+                    "test": test_match,
+                    "score_or_grade": ""
+                }
+                
+                # 같은 줄에서 점수/등급도 확인
+                # 숫자 점수 (예: 950점, 950)
+                score_match = re.search(r'(\d+)(?:점|points?)?', line)
+                if score_match:
+                    current_language["score_or_grade"] = score_match.group(1)
+                    logger.info(f"같은 줄에서 점수 발견: {score_match.group(1)}")
+                else:
+                    # 등급 (예: IH, IM3 등)
+                    for grade in language_keywords['grade']:
+                        if grade in line:
+                            current_language["score_or_grade"] = grade
+                            logger.info(f"같은 줄에서 등급 발견: {grade}")
+                            break
+                
+                continue
+            
+            # 현재 언어 정보가 있는 경우 점수/등급 추출
+            if current_language and not current_language["score_or_grade"]:
+                # 숫자 점수
+                score_match = re.search(r'(\d+)(?:점|points?)?', line)
+                if score_match:
+                    current_language["score_or_grade"] = score_match.group(1)
+                    logger.info(f"다음 줄에서 점수 발견: {score_match.group(1)}")
+                else:
+                    # 등급
+                    for grade in language_keywords['grade']:
+                        if grade in line:
+                            current_language["score_or_grade"] = grade
+                            logger.info(f"다음 줄에서 등급 발견: {grade}")
+                            break
+        
+        # 마지막 어학 정보 저장
+        if current_language:
+            result["languages"].append(current_language)
+            logger.info(f"마지막 어학 정보 저장: {current_language}")
+        
+        logger.info(f"총 {len(result['languages'])}개의 어학 정보 추출됨")
+        logger.info("=== 어학 정보 추출 완료 ===\n")
+
+    def extract_activity_direct(self, lines: List[str], result: Dict):
+        """직접적 활동 정보 추출 - 활동명 다음에 날짜/헤더/빈줄이 오더라도 그 다음 텍스트를 역할로 매칭, 역할에서 기간 등 불필요한 정보 제거"""
+        logger.info("\n=== 활동 정보 추출 시작 ===")
+        activities = []
+        activity_section_start = -1
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line in ["사회경험", "활동", "경험", "Experience", "Activities"]:
+                activity_section_start = i
+                logger.info(f"활동 섹션 시작: {line} (라인 {i+1})")
+                break
+        if activity_section_start == -1:
+            logger.info("활동 섹션을 찾을 수 없음")
+            result["activities"] = []
+            return
+        i = activity_section_start + 1
+        while i < len(lines):
+            line = lines[i].strip()
+            if line in ["자격증", "어학", "기술", "프로젝트", "수상", "자기소개", "수상경력", "어학능력"]:
+                break
+            if re.match(r'\d{4}\.\d{2}', line):
+                i += 1
+                continue
+            activity_keywords = [
+                "전시회", "축제", "컨퍼런스", "세미나", "워크샵", "프로젝트", 
+                "동아리", "봉사", "인턴십", "경진대회", "대회", "해커톤", 
+                "연구", "개발", "디자인", "마케팅", "기획", "운영", "관리",
+                "전시", "행사", "이벤트", "페스티벌", "공모전", "콘테스트",
+                "엑스포", "박람회", "컨벤션", "심포지엄", "포럼", "캠프"
+            ]
+            is_activity_name = any(keyword in line for keyword in activity_keywords)
+            if is_activity_name and len(line) > 1:
+                activity_name = line
+                role = ""
+                award = ""
+                j = i + 1
+                # 날짜/헤더/빈줄을 건너뛰고 실제 역할 찾기
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if not next_line or re.match(r'\d{4}\.\d{2}', next_line) or next_line in ["Experience", "사회경험", "자격증", "어학", "기술", "프로젝트", "수상", "자기소개", "수상경력", "어학능력"]:
+                        j += 1
+                        continue
+                    # 역할 키워드가 있거나, 적당한 길이의 텍스트면 역할로 간주
+                    if len(next_line) > 1 and len(next_line) < 30:
+                        # 역할에서 'ㅣ 6개월', 'ㅣ 30개월' 등 기간 정보 제거
+                        role = re.sub(r'ㅣ\s*\d+개월', '', next_line).strip()
+                        # 역할에서 숫자+개월 패턴도 제거
+                        role = re.sub(r'\d+개월', '', role).strip()
+                        logger.info(f"역할로 간주: {role}")
+                        j += 1
+                        break
+                    j += 1
+                activities.append({
+                    "name": activity_name,
+                    "role": role,
+                    "award": award
+                })
+                logger.info(f"활동 정보 추가: {activity_name} - {role} - {award}")
+                i = j
+            else:
+                i += 1
+        # 중복 제거 (활동명 기준)
+        unique_activities = []
+        seen_names = set()
+        for activity in activities:
+            if activity["name"] not in seen_names:
+                unique_activities.append(activity)
+                seen_names.add(activity["name"])
+        result["activities"] = unique_activities
+        logger.info(f"총 {len(unique_activities)}개의 고유 활동 정보 추출됨")
+        logger.info("=== 활동 정보 추출 완료 ===")
+
+    def extract_skill_direct(self, lines: List[str], result: Dict):
+        """직접적 스킬 정보 추출"""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 기술 스킬 패턴들
+            skill_patterns = [
+                # 프로그래밍 언어
+                r'(Python|파이썬)',
+                r'(Java|자바)',
+                r'(JavaScript|자바스크립트|JS)',
+                r'(TypeScript|타입스크립트|TS)',
+                r'(C\+\+|C\+\+11|C\+\+14|C\+\+17)',
+                r'(C#|C샵)',
+                r'(PHP|피에이치피)',
+                r'(Ruby|루비)',
+                r'(Go|고)',
+                r'(Rust|러스트)',
+                r'(Swift|스위프트)',
+                r'(Kotlin|코틀린)',
+                r'(Scala|스칼라)',
+                # 프레임워크/라이브러리
+                r'(React|리액트)',
+                r'(Vue|뷰)',
+                r'(Angular|앵귤러)',
+                r'(Node\.js|노드)',
+                r'(Django|장고)',
+                r'(Flask|플라스크)',
+                r'(Spring|스프링)',
+                r'(Express|익스프레스)',
+                r'(Laravel|라라벨)',
+                r'(ASP\.NET|닷넷)',
+                # 데이터베이스
+                r'(MySQL|마이SQL)',
+                r'(PostgreSQL|포스트그레SQL)',
+                r'(MongoDB|몽고DB)',
+                r'(Redis|레디스)',
+                r'(Oracle|오라클)',
+                r'(SQLite|SQLite)',
+                # 클라우드/인프라
+                r'(Docker|도커)',
+                r'(Kubernetes|쿠버네티스|K8s)',
+                r'(AWS|아마존|Amazon)',
+                r'(Azure|애저)',
+                r'(GCP|구글클라우드|Google.?Cloud)',
+                r'(Jenkins|젠킨스)',
+                r'(Git|깃)',
+                r'(GitHub|깃허브)',
+                r'(GitLab|깃랩)',
+                # 디자인 도구
+                r'(Photoshop|포토샵)',
+                r'(Illustrator|일러스트레이터)',
+                r'(Figma|피그마)',
+                r'(Sketch|스케치)',
+                r'(XD|Adobe.?XD)',
+                r'(InDesign|인디자인)',
+                # 오피스 도구
+                r'(Excel|엑셀)',
+                r'(PowerPoint|파워포인트)',
+                r'(Word|워드)',
+                r'(Access|액세스)',
+                r'(Outlook|아웃룩)'
+            ]
+            
+            for pattern in skill_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    skill_name = match.group(1).strip()
+                    if skill_name not in result["skills"]:
+                        result["skills"].append(skill_name)
+                    break 
+
+    def extract_career_direct(self, lines: List[str], result: Dict):
+        """직접적 경력 정보 추출"""
+        current_career = None
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 회사명 추출
+            company_patterns = [
+                r'([가-힣a-zA-Z\s]+(?:사원|주식회사|회사|기업|corporation|corp|inc|llc|co\.|ltd))',
+                r'([가-힣a-zA-Z\s]+(?:그룹|시스템|솔루션|테크|tech|디자인|개발|마케팅))',
+                r'([가-힣a-zA-Z\s]+(?:스튜디오|랩|연구소|센터|아카데미))'
+            ]
+            
+            is_company_line = False
+            company_name = ""
+            
+            for pattern in company_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    company_name = match.group(1).strip()
+                    # '사원'이 포함되어 있으면 제거
+                    company_name = re.sub(r'사원$', '', company_name).strip()
+                    is_company_line = True
+                    break
+            
+            if is_company_line:
+                if current_career:
+                    # 직무가 없으면 기본값으로 정규직 설정
+                    if not current_career["role"]:
+                        current_career["role"] = "정규직"
+                    result["careers"].append(current_career)
+                
+                current_career = {
+                    "company": company_name,
+                    "role": "",
+                    "work_month": 0
+                }
+                continue
+            
+            # 직무 추출 - 인턴/정규직/대표로 분류
+            if current_career:
+                # 인턴 관련 패턴 (가장 우선순위)
+                intern_patterns = [
+                    r'(인턴|intern|인턴십|internship)',
+                    r'(수습|견습|trainee)',
+                    r'(아르바이트|알바|part.?time)',
+                    r'(보조|어시스턴트|assistant)'
+                ]
+                
+                # 대표 관련 패턴 (두 번째 우선순위)
+                representative_patterns = [
+                    r'(대표|president|director|chief|대표자)',
+                    r'(회장|chairman|executive|이사)',
+                    r'(founder|창업자|설립자|주최자)',
+                    r'(팀장|부장|과장|차장)'
+                ]
+                
+                # 정규직 관련 패턴 (기본값)
+                regular_patterns = [
+                    r'(정규직|regular|full.?time|permanent)',
+                    r'(참여|활동|담당|책임|리드|lead|담당자|책임자)',
+                    r'(기획|운영|관리|manager|organizer)',
+                    r'(전시주관|행사진행|participant)'
+                ]
+                
+                # 인턴 확인 (가장 우선순위)
+                for pattern in intern_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match and not current_career["role"]:
+                        current_career["role"] = "인턴"
+                        break
+                
+                # 대표 확인 (두 번째 우선순위)
+                if not current_career["role"]:
+                    for pattern in representative_patterns:
+                        match = re.search(pattern, line, re.IGNORECASE)
+                        if match:
+                            current_career["role"] = "대표"
+                            break
+                
+                # 정규직 확인 (기본값)
+                if not current_career["role"]:
+                    for pattern in regular_patterns:
+                        match = re.search(pattern, line, re.IGNORECASE)
+                        if match:
+                            current_career["role"] = "정규직"
+                            break
+            
+            # 근무기간 추출 (간단한 개월수만)
+            if current_career:
+                # 개월 단위
+                month_match = re.search(r'(\d+)\s*개월', line)
+                if month_match:
+                    current_career["work_month"] = int(month_match.group(1))
+                    continue
+        
+        # 마지막 경력 추가
+        if current_career:
+            # 직무가 없으면 기본값으로 정규직 설정
+            if not current_career["role"]:
+                current_career["role"] = "정규직"
+            result["careers"].append(current_career)
+
+    def extract_certificate_direct(self, lines: List[str], result: Dict):
+        """직접적 자격증 정보 추출"""
+        # 제외할 섹션 제목들
+        exclude_sections = [
+            '기본사항', '학력사항', '경력사항', '사회경험', '활동사항', 
+            '자격증', '어학능력', '수상내역', '프로젝트', '기술스택',
+            'basic', 'education', 'career', 'experience', 'activity',
+            'certificate', 'language', 'award', 'project', 'skill'
+        ]
+        
+        # 제외할 활동/역할 키워드들
+        exclude_activity_keywords = [
+            '전시주관', '행사진행', '담당', '책임', '리드', '매니저', '참여', '활동',
+            '기획', '운영', '관리', '보조', '어시스턴트', 'organizer', 'manager', 
+            'participant', 'leader', 'assistant', '담당자', '책임자'
+        ]
+        
+        # 제외할 회사/기관 키워드들
+        exclude_company_keywords = [
+            '사원', '주식회사', '회사', '기업', 'corporation', 'corp', 'inc', 'llc', 'co.', 'ltd',
+            '그룹', '시스템', '솔루션', '테크', 'tech', '디자인', '개발', '마케팅',
+            '스튜디오', '랩', '연구소', '센터', '아카데미'
+        ]
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 섹션 제목 제외
+            if any(section in line for section in exclude_sections):
+                continue
+            
+            # 활동/역할 키워드가 포함된 경우 제외
+            if any(keyword in line for keyword in exclude_activity_keywords):
+                continue
+            
+            # 회사/기관 키워드가 포함된 경우 제외
+            if any(keyword in line for keyword in exclude_company_keywords):
+                continue
+            
+            # 숫자와 함께 오는 활동/회사명 제외 (예: "전시주관및 행사진행 03", "공픔디자인사원 05")
+            if re.search(r'\d+$', line) and any(keyword in line for keyword in exclude_activity_keywords + exclude_company_keywords):
+                continue
+            
+            # 어학 관련 키워드가 포함된 경우 제외 (어학능력에서 처리)
+            language_keywords = [
+                'toeic', 'toefl', 'teps', 'opic', 'jlpt', 'hsk', 'topik',
+                '토익', '토플', '텝스', '오픽', '일본어', '중국어', '한국어',
+                '영어', '일본어', '중국어', '한국어', '어학', 'language'
+            ]
+            
+            if any(lang_keyword in line.lower() for lang_keyword in language_keywords):
+                continue
+            
+            # 자격증 패턴들 (더 엄격하게)
+            certificate_patterns = [
+                # 운전면허
+                r'(운전면허증?|운전면허|driver.?license)',
+                # Adobe 제품
+                r'(Photoshop|포토샵|adobe.?photoshop)',
+                r'(Illustrator|일러스트레이터|adobe.?illustrator|111ustrator)',
+                r'(InDesign|인디자인|adobe.?indesign)',
+                r'(Premiere|프리미어|adobe.?premiere)',
+                r'(After.?Effects|애프터이펙트|adobe.?after.?effects)',
+                # Microsoft Office
+                r'(Office|오피스|microsoft.?office|M5 office)',
+                r'(Word|워드|microsoft.?word)',
+                r'(Excel|엑셀|microsoft.?excel)',
+                r'(PowerPoint|파워포인트|microsoft.?powerpoint)',
+                # IT 자격증
+                r'(정보처리기사|정보처리산업기사|정보처리기능사)',
+                r'(컴퓨터활용능력|컴활)',
+                r'(워드프로세서|워드)',
+                r'(컴퓨터그래픽스운용기능사|컴퓨터그래픽스)',
+                r'(사무자동화산업기사|사무자동화)',
+                r'(전자계산기조직응용기사|전자계산기)',
+                # 기타 IT 자격증
+                r'(SQLD|SQLP|SQL)',
+                r'(CCNA|CCNP|CCIE)',
+                r'(AWS|Azure|GCP)',
+                r'(Docker|Kubernetes|K8s)',
+                r'(PMP|프로젝트관리)',
+                r'(ITIL|아이틸)',
+                # 회계/세무 자격증
+                r'(공인회계사|CPA)',
+                r'(세무사|세무)',
+                r'(관세사|관세)',
+                r'(공인노무사|노무사)',
+                r'(공인중개사|중개사)',
+                # 금융 자격증
+                r'(투자상담사|투자)',
+                r'(자산관리사|자산관리)',
+                r'(보험설계사|보험)',
+                r'(증권투자상담사|증권)',
+                # 기타 전문 자격증
+                r'(변리사|변리)',
+                r'(법무사|법무)',
+                r'(평가사|평가)',
+                r'(기사|산업기사|기능사)',
+                # GTQ (그래픽기술자격)
+                r'(GTQ|그래픽기술자격)',
+                # 한글, 엑셀 등 개별 프로그램
+                r'(한글|HWP|한글워드프로세서)',
+                r'(엑셀|Excel)',
+                r'(파워포인트|PowerPoint)',
+                r'(워드|Word)',
+                # License 관련
+                r'(License|라이센스)',
+                # 기타 자격증 키워드 (더 엄격하게)
+                r'(자격증|자격|certificate|cert)'
+            ]
+            
+            # 자격증 패턴 검색
+            for pattern in certificate_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    cert_name = match.group(1).strip()
+                    
+                    # "자격증" 단어 제거
+                    cert_name = re.sub(r'자격증?', '', cert_name).strip()
+                    
+                    # 점수/등급 추출
+                    score_grade = ""
+                    
+                    # 등급 패턴 (1급, 2급, 3급 등)
+                    grade_match = re.search(r'([1-3]급)', line)
+                    if grade_match:
+                        score_grade = grade_match.group(1)
+                    
+                    # 점수 패턴 (숫자 + 점)
+                    score_match = re.search(r'(\d+)점', line)
+                    if score_match:
+                        score_grade = f"{score_match.group(1)}점"
+                    
+                    # 기타 등급 패턴 (A, B, C 등)
+                    other_grade_match = re.search(r'([A-Z]등급?|[A-Z])', line)
+                    if other_grade_match and not score_grade:
+                        score_grade = other_grade_match.group(1)
+                    
+                    # 자격증 정보 구성
+                    cert_info = cert_name
+                    if score_grade:
+                        cert_info = f"{cert_name} ({score_grade})"
+                    
+                    # 빈 문자열이 아니고 중복되지 않은 경우만 추가
+                    if cert_info and cert_info not in result["certificates"]:
+                        result["certificates"].append(cert_info)
+                    break
+            
+            # 패턴에서 찾지 못한 경우, 자격증 키워드가 포함된 라인 검색 (더 엄격하게)
+            if not any(re.search(pattern, line, re.IGNORECASE) for pattern in certificate_patterns):
+                cert_keywords = [
+                    '자격증', '자격', '기사', '산업기사', '기능사', '사', '증', '면허',
+                    'certificate', 'license', 'qualification', 'cert'
+                ]
+                
+                if any(keyword in line.lower() for keyword in cert_keywords):
+                    # 라인에서 자격증명 추출
+                    cert_name = line.strip()
+                    
+                    # "자격증" 단어 제거
+                    cert_name = re.sub(r'자격증?', '', cert_name).strip()
+                    
+                    # 점수/등급 추출
+                    score_grade = ""
+                    
+                    # 등급 패턴 (1급, 2급, 3급 등)
+                    grade_match = re.search(r'([1-3]급)', line)
+                    if grade_match:
+                        score_grade = grade_match.group(1)
+                    
+                    # 점수 패턴 (숫자 + 점)
+                    score_match = re.search(r'(\d+)점', line)
+                    if score_match:
+                        score_grade = f"{score_match.group(1)}점"
+                    
+                    # 기타 등급 패턴 (A, B, C 등)
+                    other_grade_match = re.search(r'([A-Z]등급?|[A-Z])', line)
+                    if other_grade_match and not score_grade:
+                        score_grade = other_grade_match.group(1)
+                    
+                    # 자격증 정보 구성
+                    cert_info = cert_name
+                    if score_grade:
+                        cert_info = f"{cert_name} ({score_grade})"
+                    
+                    # 빈 문자열이 아니고 중복되지 않은 경우만 추가
+                    if cert_info and cert_info not in result["certificates"]:
+                        result["certificates"].append(cert_info)
+
+    def process_education(self, texts: List[str], result: Dict, patterns: Dict):
+        """학력 정보 처리"""
+        current_edu = {}
+        for text in texts:
+            logger.info(f"Processing education text: {text}")
+            
+            # GPA 추출 (예: 3.9/4.3, 3.9/4.5 등)
+            gpa_match = re.search(r'(\d+\.?\d*)\s*\/\s*(\d+\.?\d*)', text)
+            if gpa_match:
+                current_edu["gpa"] = float(gpa_match.group(1))
+                current_edu["gpa_max"] = float(gpa_match.group(2))
+                logger.info(f"Found GPA: {current_edu['gpa']}/{current_edu['gpa_max']}")
+                continue
+
+            # 대학교명 (서울대, 연세대 등 주요 대학 포함)
+            uni_pattern = r'(서울대학교|연세대학교|고려대학교|성균관대학교|한양대학교|중앙대학교|경희대학교|서강대학교|이화여자대학교|건국대학교|동국대학교|홍익대학교|아주대학교|숭실대학교|인하대학교|국민대학교|세종대학교|단국대학교|광운대학교|상명대학교|서울시립대학교|숙명여자대학교|한국외국어대학교|한성대학교|명지대학교|가천대학교|가톨릭대학교|강남대학교|강원대학교|경기대학교|경남대학교|경북대학교|경상대학교|계명대학교|공주대학교|광주과학기술원|국민대학교|군산대학교|금오공과대학교|남서울대학교|단국대학교|대구가톨릭대학교|대구대학교|대구한의대학교|대전대학교|동덕여자대학교|동서대학교|동아대학교|동의대학교|명지대학교|목원대학교|목포대학교|배재대학교|백석대학교|부경대학교|부산가톨릭대학교|부산대학교|부산외국어대학교|삼육대학교|상명대학교|서경대학교|서울과학기술대학교|서울교육대학교|서울기독교대학교|서울시립대학교|서울여자대학교|서원대학교|선문대학교|성결대학교|성신여자대학교|세명대학교|세종대학교|수원대학교|숙명여자대학교|순천대학교|순천향대학교|숭실대학교|신라대학교|아주대학교|안동대학교|안양대학교|연세대학교|영남대학교|영산대학교|용인대학교|우석대학교|울산대학교|원광대학교|을지대학교|이화여자대학교|인제대학교|인천대학교|인하대학교|전남대학교|전북대학교|전주대학교|제주대학교|조선대학교|중부대학교|중앙대학교|창원대학교|청주대학교|충남대학교|충북대학교|한경대학교|한국교원대학교|한국교통대학교|한국기술교육대학교|한국산업기술대학교|한국외국어대학교|한국항공대학교|한국해양대학교|한남대학교|한동대학교|한림대학교|한밭대학교|한서대학교|한성대학교|한신대학교|한양대학교|호서대학교|홍익대학교)'
+            if re.search(uni_pattern, text):
+                if current_edu:
+                    result["universities"].append(current_edu)
+                current_edu = {"name": text.strip()}
+                logger.info(f"Found university: {current_edu['name']}")
+                continue
+
+            # 전공 (학과/전공 키워드 포함)
+            major_pattern = r'([\w\s·]+)(학과|전공|계열)'
+            major_match = re.search(major_pattern, text)
+            if major_match:
+                current_edu["major"] = major_match.group(1).strip()
+                logger.info(f"Found major: {current_edu['major']}")
+                continue
+
+            # 학위 구분
+            degree_pattern = r'(학사|석사|박사|전문학사|고등학교)'
+            degree_match = re.search(degree_pattern, text)
+            if degree_match:
+                current_edu["degree"] = degree_match.group(1)
+                logger.info(f"Found degree: {current_edu['degree']}")
+                continue
+
+            # 졸업 상태
+            status_pattern = r'(졸업|재학|휴학|중퇴|수료|졸업예정)'
+            status_match = re.search(status_pattern, text)
+            if status_match:
+                current_edu["status"] = status_match.group(1)
+                logger.info(f"Found status: {current_edu['status']}")
+                continue
+
+        # 마지막 교육 정보 추가
+        if current_edu:
+            result["universities"].append(current_edu)
+            logger.info(f"Added final education record: {current_edu}")
+
+        # 최종 학력 설정
+        if result["universities"]:
+            # 학위 우선순위
+            degree_priority = {"박사": 5, "석사": 4, "학사": 3, "전문학사": 2, "고등학교": 1}
+            
+            # 최종 학력 찾기
+            highest_edu = max(
+                result["universities"],
+                key=lambda x: degree_priority.get(x.get("degree", ""), 0)
+            )
+            
+            # 최종학력 설정 - 학위에 따른 교육 수준 사용
+            degree = highest_edu.get("degree", "")
+            if degree == "박사" or degree == "석사":
+                result["final_edu"] = "대학원"
+            elif degree == "학사" or degree == "전문학사":
+                result["final_edu"] = "대학교"
+            else:
+                result["final_edu"] = "고등학교"  # 기본값
+            
+            result["final_status"] = highest_edu.get("status", "")
+        else:
+            # 대학 정보가 없는 경우
+            result["final_edu"] = "고등학교"
+            result["final_status"] = "졸업"
+            logger.info("대학 정보 없음, 기본값 설정")
+        
+        logger.info("=== 학력 정보 추출 완료 ===\n")
+
+    def process_languages(self, texts: List[str], result: Dict, patterns: Dict):
+        """어학 정보 처리"""
+        current_lang = {}
+        
+        for text in texts:
+            logger.info(f"Processing language text: {text}")
+            
+            # 시험 종류 (TOEIC, TOEFL, TEPS, OPIC, JLPT, HSK, TOPIK 등)
+            test_pattern = r'(TOEIC|TOEFL|TEPS|OPIC|JLPT|HSK|TOPIK|토익|토플|텝스|오픽|일본어능력시험|중국어능력시험|한국어능력시험)'
+            test_match = re.search(test_pattern, text, re.IGNORECASE)
+            
+            if test_match:
+                if current_lang:
+                    result["languages"].append(current_lang)
+                current_lang = {"test": test_match.group(1)}
+                logger.info(f"Found language test: {current_lang['test']}")
+                
+                # 같은 라인에서 점수 찾기
+                score_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:점|point|점수)?', text)
+                if score_match:
+                    score = score_match.group(1)
+                    current_lang["score"] = float(score) if '.' in score else int(score)
+                    logger.info(f"Found score in same line: {current_lang['score']}")
+                continue
+            
+            # 점수만 있는 라인
+            score_pattern = r'(\d+(?:\.\d+)?)\s*(?:점|point|점수)?'
+            score_match = re.search(score_pattern, text)
+            if score_match and current_lang and "score" not in current_lang:
+                score = score_match.group(1)
+                current_lang["score"] = float(score) if '.' in score else int(score)
+                logger.info(f"Found score: {current_lang['score']}")
+                continue
+            
+            # 날짜 처리
+            date_pattern = r'(\d{4})[년\.]\s*(\d{1,2})[월\.](?:\s*(\d{1,2})[일\.])?'
+            date_match = re.search(date_pattern, text)
+            if date_match and current_lang:
+                year = date_match.group(1)
+                month = date_match.group(2).zfill(2)
+                day = date_match.group(3).zfill(2) if date_match.group(3) else "01"
+                current_lang["date"] = f"{year}-{month}-{day}"
+                logger.info(f"Found date: {current_lang['date']}")
+        
+        # 마지막 어학 정보 추가
+        if current_lang:
+            result["languages"].append(current_lang)
+            logger.info(f"Added final language record: {current_lang}")
+        
+        # 어학 점수 정규화
+        for lang in result["languages"]:
+            if "test" in lang:
+                # 시험 이름 정규화
+                test_name = lang["test"].upper()
+                if "토익" in test_name:
+                    lang["test"] = "TOEIC"
+                elif "토플" in test_name:
+                    lang["test"] = "TOEFL"
+                elif "텝스" in test_name:
+                    lang["test"] = "TEPS"
+                elif "오픽" in test_name:
+                    lang["test"] = "OPIC"
+                elif "일본어능력시험" in test_name:
+                    lang["test"] = "JLPT"
+                elif "중국어능력시험" in test_name:
+                    lang["test"] = "HSK"
+                elif "한국어능력시험" in test_name:
+                    lang["test"] = "TOPIK"
+
+    def is_valid_gpa(self, gpa: float) -> bool:
+        """학점 유효성 검사"""
+        return 0.0 <= gpa <= 4.5
+

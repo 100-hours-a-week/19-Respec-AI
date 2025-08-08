@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스펙 평가 테스트</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+            margin-bottom: 40px;
+        }
+        h1 {
+            color: #1a56db;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .form-section {
+            margin-bottom: 25px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 15px;
+            background-color: #f9fafb;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .form-row {
+            display: flex;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+        .form-group {
+            flex: 1;
+            min-width: 200px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        .help-text {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+        button {
+            cursor: pointer;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        .btn-primary {
+            background-color: #1a56db;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #1e429f;
+        }
+        .btn-secondary {
+            background-color: #e5e7eb;
+            color: #374151;
+        }
+        .btn-secondary:hover {
+            background-color: #d1d5db;
+        }
+        .btn-danger {
+            background-color: #ef4444;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #dc2626;
+        }
+        .add-btn, .remove-btn {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 16px;
+        }
+        .add-btn {
+            background-color: #10b981;
+            color: white;
+        }
+        .remove-btn {
+            background-color: #ef4444;
+            color: white;
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+        .item-container {
+            position: relative;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            border: 1px solid #e5e7eb;
+        }
+        .api-version-section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background-color: #f0f9ff;
+            border-radius: 8px;
+            border: 1px solid #bae6fd;
+        }
+        .api-version-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #0369a1;
+        }
+        .radio-group {
+            display: flex;
+            gap: 20px;
+        }
+        .radio-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .radio-item input[type="radio"] {
+            width: auto;
+            margin: 0;
+        }
+        .radio-item label {
+            margin: 0;
+            font-weight: normal;
+            cursor: pointer;
+        }
+        .form-actions {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 30px;
+        }
+        .form-actions button {
+            min-width: 150px;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .result-section {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f0f9ff;
+            border-radius: 8px;
+            border: 1px solid #bae6fd;
+            display: none;
+        }
+        .result-section h2 {
+            color: #0369a1;
+            margin-top: 0;
+        }
+        .result-score {
+            font-size: 24px;
+            font-weight: bold;
+            color: #0369a1;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .detailed-scores {
+            display: none;
+            margin-top: 20px;
+        }
+        .score-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            margin-bottom: 8px;
+            background-color: white;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+        }
+        .score-label {
+            font-weight: 500;
+            color: #374151;
+        }
+        .score-value {
+            font-weight: bold;
+            color: #1f2937;
+        }
+        .score-bar-container {
+            width: 100px;
+            height: 8px;
+            background-color: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-left: 10px;
+        }
+        .score-bar {
+            height: 100%;
+            background: linear-gradient(to right, #ef4444, #f59e0b, #10b981);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        .error-message {
+            color: #b91c1c;
+            background-color: #fee2e2;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .assessment-section {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        .assessment-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>스펙 평가 테스트</h1>
+        <div class="error-message" id="errorMessage"></div>
+        
+        <!-- API 버전 선택 섹션 -->
+        <div class="api-version-section">
+            <div class="api-version-title">평가 방식 선택</div>
+            <div class="radio-group">
+                <div class="radio-item">
+                    <input type="radio" id="apiV1" name="apiVersion" value="v1" checked>
+                    <label for="apiV1">V1 - 총점만 보기</label>
+                </div>
+                <div class="radio-item">
+                    <input type="radio" id="apiV2" name="apiVersion" value="v2">
+                    <label for="apiV2">V2 - 세부 점수 포함</label>
+                </div>
+            </div>
+        </div>
+        
+        <form id="specForm">
+            <!-- 기본 정보 섹션 -->
+            <div class="form-section">
+                <div class="section-title">기본 정보</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="nickname">닉네임 <span style="color: #ef4444;">*</span></label>
+                        <input type="text" id="nickname" name="nickname" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 최종 학력 섹션 -->
+            <div class="form-section">
+                <div class="section-title">최종 학력</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="final_edu">학력 <span style="color: #ef4444;">*</span></label>
+                        <select id="final_edu" name="final_edu" required>
+                            <option value="중학교">중학교</option>
+                            <option value="고등학교">고등학교</option>
+                            <option value="2_3년제 대학교">2/3년제 대학교</option>
+                            <option value="대학교" selected>대학교</option>
+                            <option value="대학원">대학원</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="final_status">상태 <span style="color: #ef4444;">*</span></label>
+                        <select id="final_status" name="final_status" required>
+                            <option value="졸업" selected>졸업</option>
+                            <option value="수료">수료</option>
+                            <option value="중퇴">중퇴</option>
+                            <option value="휴학">휴학</option>
+                            <option value="재학">재학</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 학력 정보 섹션 -->
+            <div class="form-section">
+                <div class="section-title">
+                    <span>학력 정보</span>
+                    <button type="button" class="add-btn" id="addEducation">+</button>
+                </div>
+                <div id="educationContainer"></div>
+            </div>
+
+            <!-- 경력 정보 섹션 -->
+            <div class="form-section">
+                <div class="section-title">
+                    <span>경력 정보</span>
+                    <button type="button" class="add-btn" id="addCareer">+</button>
+                </div>
+                <div id="careerContainer"></div>
+            </div>
+
+            <!-- 자격증 섹션 -->
+            <div class="form-section">
+                <div class="section-title">
+                    <span>자격증</span>
+                    <button type="button" class="add-btn" id="addCertificate">+</button>
+                </div>
+                <div id="certificateContainer"></div>
+            </div>
+
+            <!-- 어학 능력 섹션 -->
+            <div class="form-section">
+                <div class="section-title">
+                    <span>어학 능력</span>
+                    <button type="button" class="add-btn" id="addLanguage">+</button>
+                </div>
+                <div id="languageContainer"></div>
+            </div>
+
+            <!-- 활동 정보 섹션 -->
+            <div class="form-section">
+                <div class="section-title">
+                    <span>활동 정보</span>
+                    <button type="button" class="add-btn" id="addActivity">+</button>
+                </div>
+                <div id="activityContainer"></div>
+            </div>
+
+            <!-- 지원 직종 섹션 -->
+            <div class="form-section">
+                <div class="section-title">지원 직종</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="desired_job">직종 <span style="color: #ef4444;">*</span></label>
+                        <select id="desired_job" name="desired_job" required>
+                            <option value="경영_사무">경영·사무</option>
+                            <option value="마케팅_광고·홍보">마케팅·광고·홍보</option>
+                            <option value="무역_유통">무역·유통</option>
+                            <option value="인터넷_IT" selected>인터넷·IT</option>
+                            <option value="생산_제조">생산·제조</option>
+                            <option value="영업_고객상담">영업·고객상담</option>
+                            <option value="건설">건설</option>
+                            <option value="금융">금융</option>
+                            <option value="연구개발_설계">연구개발·설계</option>
+                            <option value="디자인">디자인</option>
+                            <option value="미디어">미디어</option>
+                            <option value="전문_특수직">전문·특수직</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn-primary" id="submitBtn">점수 평가</button>
+                <button type="button" class="btn-secondary" id="resetBtn">초기화</button>
+            </div>
+        </form>
+
+        <div class="result-section" id="resultSection">
+            <h2>평가 결과</h2>
+            <div class="result-score" id="resultScore"></div>
+            
+            <!-- V2 전용 세부 점수 표시 영역 -->
+            <div class="detailed-scores" id="detailedScores">
+                <h3 style="color: #0369a1; margin-bottom: 15px;">세부 점수</h3>
+                <div class="score-item">
+                    <span class="score-label">학력 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="academicScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="academicBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">경력 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="workExperienceScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="workExperienceBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">자격증 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="certificationScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="certificationBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">어학 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="languageProficiencyScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="languageProficiencyBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">활동 점수</span>
+                    <div style="display: flex; align-items: center;">
+                        <span class="score-value" id="extracurricularScore">0점</span>
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="extracurricularBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="assessment-section">
+                <div class="assessment-title">상세 평가 내용</div>
+                <div id="assessment"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // API 기본 URL 설정
+            const API_BASE_URL = window.location.origin;
+            
+            // 템플릿 정의
+            const templates = {
+                education: (index) => `
+                    <div class="item-container education-item">
+                        <button type="button" class="remove-btn" data-remove="education" data-index="${index}">×</button>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="school_name_${index}">학교명</label>
+                                <input type="text" id="school_name_${index}" name="universities[${index}][school_name]" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="degree_${index}">학위</label>
+                                <select id="degree_${index}" name="universities[${index}][degree]">
+                                    <option value="박사">박사</option>
+                                    <option value="석사">석사</option>
+                                    <option value="학사" selected>학사</option>
+                                    <option value="전문학사">전문학사</option>
+                                    <option value="수료">수료</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="major_${index}">전공</label>
+                                <input type="text" id="major_${index}" name="universities[${index}][major]" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="gpa_${index}">학점</label>
+                                <input type="number" id="gpa_${index}" name="universities[${index}][gpa]" step="0.01" min="0" max="4.5" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="gpa_max_${index}">최대 학점</label>
+                                <select id="gpa_max_${index}" name="universities[${index}][gpa_max]">
+                                    <option value="4.3">4.3</option>
+                                    <option value="4.5" selected>4.5</option>
+                                    <option value="4.0">4.0</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                career: (index) => `
+                    <div class="item-container career-item">
+                        <button type="button" class="remove-btn" data-remove="career" data-index="${index}">×</button>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="company_${index}">회사명</label>
+                                <input type="text" id="company_${index}" name="careers[${index}][company]" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="role_${index}">직책/역할</label>
+                                <select id="role_${index}" name="careers[${index}][role]">
+                                    <option value="대표">대표</option>
+                                    <option value="정규직">정규직</option>
+                                    <option value="인턴" selected>인턴</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="work_month_${index}">근무 개월</label>
+                                <input type="number" id="work_month_${index}" name="careers[${index}][work_month]" min="0" max="999" required>
+                                <div class="help-text">최대 3자리 숫자까지 입력 가능</div>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                certificate: (index) => `
+                    <div class="item-container certificate-item">
+                        <button type="button" class="remove-btn" data-remove="certificate" data-index="${index}">×</button>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="certificate_${index}">자격증명</label>
+                                <input type="text" id="certificate_${index}" name="certificates[${index}]" required>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                language: (index) => `
+                    <div class="item-container language-item">
+                        <button type="button" class="remove-btn" data-remove="language" data-index="${index}">×</button>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="language_test_${index}">시험 종류</label>
+                                <select id="language_test_${index}" name="languages[${index}][test]">
+                                    <option value="TOEIC_ENGLISH" selected>TOEIC(영어)</option>
+                                    <option value="TOEFL_ENGLISH">TOEFL(영어)</option>
+                                    <option value="TEPS_ENGLISH">TEPS(영어)</option>
+                                    <option value="G_TELP_ENGLISH">G-TELP(영어)</option>
+                                    <option value="TOEIC_SPEAKING_ENGLISH">TOEIC Speaking(영어)</option>
+                                    <option value="TEPS_SPEAKING_ENGLISH">TEPS Speaking(영어)</option>
+                                    <option value="G_TELP_SPEAKING_ENGLISH">G-TELP Speaking(영어)</option>
+                                    <option value="IELTS_ENGLISH">IELTS(영어)</option>
+                                    <option value="FLEX_ENGLISH">FLEX(영어)</option>
+                                    <option value="OPIC_ENGLISH">OPIC(영어)</option>
+                                    <option value="SNULT_GERMAN">SNULT(독일어)</option>
+                                    <option value="FLEX_GERMAN">FLEX(독일어)</option>
+                                    <option value="SNULT_FRENCH">SNULT(프랑스어)</option>
+                                    <option value="FLEX_FRENCH">FLEX(프랑스어)</option>
+                                    <option value="SNULT_RUSSIAN">SNULT(러시아어)</option>
+                                    <option value="FLEX_RUSSIAN">FLEX(러시아어)</option>
+                                    <option value="OPIC_RUSSIAN">OPIC(러시아어)</option>
+                                    <option value="SNULT_CHINESE">SNULT(중국어)</option>
+                                    <option value="NEW_HSK_CHINESE">HSK(중국어)</option>
+                                    <option value="FLEX_CHINESE">FLEX(중국어)</option>
+                                    <option value="OPIC_CHINESE">OPIC(중국어)</option>
+                                    <option value="SNULT_JAPANESE">SNULT(일본어)</option>
+                                    <option value="JPT_JAPANESE">JPT(일본어)</option>
+                                    <option value="FLEX_JAPANESE">FLEX(일본어)</option>
+                                    <option value="OPIC_JAPANESE">OPIC(일본어)</option>
+                                    <option value="SNULT_SPANISH">SNULT(스페인어)</option>
+                                    <option value="FLEX_SPANISH">FLEX(스페인어)</option>
+                                    <option value="OPIC_SPANISH">OPIC(스페인어)</option>
+                                    <option value="OPIC_VIETNAMESE">OPIC(베트남어)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="language_score_${index}">점수/등급</label>
+                                <input type="text" id="language_score_${index}" name="languages[${index}][score_or_grade]" required>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                activity: (index) => `
+                    <div class="item-container activity-item">
+                        <button type="button" class="remove-btn" data-remove="activity" data-index="${index}">×</button>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="activity_name_${index}">활동명</label>
+                                <input type="text" id="activity_name_${index}" name="activities[${index}][name]" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="activity_role_${index}">역할</label>
+                                <input type="text" id="activity_role_${index}" name="activities[${index}][role]" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="activity_award_${index}">수상 내역 (선택사항)</label>
+                                <input type="text" id="activity_award_${index}" name="activities[${index}][award]">
+                            </div>
+                        </div>
+                    </div>
+                `
+            };
+
+            // 카운터 초기화
+            let counters = {
+                education: 0,
+                career: 0,
+                certificate: 0,
+                language: 0,
+                activity: 0
+            };
+
+            // 추가 버튼 이벤트 리스너
+            document.getElementById('addEducation').addEventListener('click', () => addItem('education'));
+            document.getElementById('addCareer').addEventListener('click', () => addItem('career'));
+            document.getElementById('addCertificate').addEventListener('click', () => addItem('certificate'));
+            document.getElementById('addLanguage').addEventListener('click', () => addItem('language'));
+            document.getElementById('addActivity').addEventListener('click', () => addItem('activity'));
+
+            // 항목 추가 함수
+            function addItem(type) {
+                const index = counters[type];
+                const container = document.getElementById(`${type}Container`);
+                container.insertAdjacentHTML('beforeend', templates[type](index));
+                counters[type]++;
+
+                // 제거 버튼에 이벤트 리스너 추가
+                const removeButtons = container.querySelectorAll(`.remove-btn[data-remove="${type}"][data-index="${index}"]`);
+                removeButtons.forEach(button => {
+                    button.addEventListener('click', function() {
+                        const itemToRemove = this.closest('.item-container');
+                        itemToRemove.remove();
+                    });
+                });
+            }
+
+            // 초기화 버튼 이벤트 리스너
+            document.getElementById('resetBtn').addEventListener('click', function() {
+                document.getElementById('specForm').reset();
+                
+                // 모든 항목 컨테이너 비우기
+                document.getElementById('educationContainer').innerHTML = '';
+                document.getElementById('careerContainer').innerHTML = '';
+                document.getElementById('certificateContainer').innerHTML = '';
+                document.getElementById('languageContainer').innerHTML = '';
+                document.getElementById('activityContainer').innerHTML = '';
+                
+                // 카운터 초기화
+                counters = {
+                    education: 0,
+                    career: 0,
+                    certificate: 0,
+                    language: 0,
+                    activity: 0
+                };
+                
+                // 결과 섹션 숨기기
+                document.getElementById('resultSection').style.display = 'none';
+                document.getElementById('detailedScores').style.display = 'none';
+                
+                // 에러 메시지 숨기기
+                document.getElementById('errorMessage').style.display = 'none';
+                
+                // API 버전을 V1으로 초기화
+                document.getElementById('apiV1').checked = true;
+            });
+
+            // 폼 제출 이벤트 리스너
+            document.getElementById('specForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                // 선택된 API 버전 확인
+                const selectedVersion = document.querySelector('input[name="apiVersion"]:checked').value;
+                const apiEndpoint = selectedVersion === 'v2' ? '/spec/v2/post' : '/spec/v1/post';
+                
+                // 제출 버튼 상태 변경
+                const submitBtn = document.getElementById('submitBtn');
+                const originalText = submitBtn.innerHTML;
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="loading"></span> 평가 중...';
+                
+                // 에러 메시지 숨기기
+                document.getElementById('errorMessage').style.display = 'none';
+                
+                // 폼 데이터 수집 및 포맷팅
+                const formData = new FormData(this);
+                const data = {
+                    nickname: formData.get('nickname'),
+                    final_edu: formData.get('final_edu'),
+                    final_status: formData.get('final_status'),
+                    desired_job: formData.get('desired_job'),
+                    universities: [],
+                    careers: [],
+                    certificates: [],
+                    languages: [],
+                    activities: []
+                };
+                
+                // 학력 데이터 수집
+                const educationItems = document.querySelectorAll('.education-item');
+                educationItems.forEach((item, i) => {
+                    data.universities.push({
+                        school_name: document.getElementById(`school_name_${i}`).value,
+                        degree: document.getElementById(`degree_${i}`).value,
+                        major: document.getElementById(`major_${i}`).value,
+                        gpa: parseFloat(document.getElementById(`gpa_${i}`).value),
+                        gpa_max: parseFloat(document.getElementById(`gpa_max_${i}`).value)
+                    });
+                });
+                
+                // 경력 데이터 수집
+                const careerItems = document.querySelectorAll('.career-item');
+                careerItems.forEach((item, i) => {
+                    data.careers.push({
+                        company: document.getElementById(`company_${i}`).value,
+                        role: document.getElementById(`role_${i}`).value,
+                        work_month: parseInt(document.getElementById(`work_month_${i}`).value)
+                    });
+                });
+                
+                // 자격증 데이터 수집
+                const certificateItems = document.querySelectorAll('.certificate-item');
+                certificateItems.forEach((item, i) => {
+                    data.certificates.push(document.getElementById(`certificate_${i}`).value);
+                });
+                
+                // 어학 데이터 수집
+                const languageItems = document.querySelectorAll('.language-item');
+                languageItems.forEach((item, i) => {
+                    data.languages.push({
+                        test: document.getElementById(`language_test_${i}`).value,
+                        score_or_grade: document.getElementById(`language_score_${i}`).value
+                    });
+                });
+                
+                // 활동 데이터 수집
+                const activityItems = document.querySelectorAll('.activity-item');
+                activityItems.forEach((item, i) => {
+                    data.activities.push({
+                        name: document.getElementById(`activity_name_${i}`).value,
+                        role: document.getElementById(`activity_role_${i}`).value,
+                        award: document.getElementById(`activity_award_${i}`).value
+                    });
+                });
+                
+                try {
+                    // API 호출
+                    const response = await axios.post(`${API_BASE_URL}${apiEndpoint}`, data);
+                    
+                    // 결과 표시
+                    const resultSection = document.getElementById('resultSection');
+                    const resultScore = document.getElementById('resultScore');
+                    const detailedScores = document.getElementById('detailedScores');
+                    
+                    resultSection.style.display = 'block';
+                    
+                    if (selectedVersion === 'v2') {
+                        // V2 응답 처리 - 세부 점수 포함
+                        resultScore.textContent = `총점: ${response.data.totalScore.toFixed(1)}점`;
+                        
+                        // 세부 점수 업데이트
+                        document.getElementById('academicScore').textContent = `${response.data.academicScore.toFixed(1)}점`;
+                        document.getElementById('workExperienceScore').textContent = `${response.data.workExperienceScore.toFixed(1)}점`;
+                        document.getElementById('certificationScore').textContent = `${response.data.certificationScore.toFixed(1)}점`;
+                        document.getElementById('languageProficiencyScore').textContent = `${response.data.languageProficiencyScore.toFixed(1)}점`;
+                        document.getElementById('extracurricularScore').textContent = `${response.data.extracurricularScore.toFixed(1)}점`;
+                        
+                        // 프로그레스 바 업데이트
+                        document.getElementById('academicBar').style.width = `${response.data.academicScore}%`;
+                        document.getElementById('workExperienceBar').style.width = `${response.data.workExperienceScore}%`;
+                        document.getElementById('certificationBar').style.width = `${response.data.certificationScore}%`;
+                        document.getElementById('languageProficiencyBar').style.width = `${response.data.languageProficiencyScore}%`;
+                        document.getElementById('extracurricularBar').style.width = `${response.data.extracurricularScore}%`;
+                        
+                        detailedScores.style.display = 'block';
+                        
+                        // 상세 평가 내용 표시
+                        document.getElementById('assessment').textContent = response.data.assessment;
+                        
+                        // alert로도 결과 표시 (V2)
+                        const scoreMessage = `스펙 평가 점수 (세부)\n` +
+                            `총점: ${response.data.totalScore.toFixed(2)}점\n` +
+                            `학력: ${response.data.academicScore.toFixed(2)}점\n` +
+                            `경력: ${response.data.workExperienceScore.toFixed(2)}점\n` +
+                            `자격증: ${response.data.certificationScore.toFixed(2)}점\n` +
+                            `어학: ${response.data.languageProficiencyScore.toFixed(2)}점\n` +
+                            `활동: ${response.data.extracurricularScore.toFixed(2)}점`;
+                        alert(scoreMessage);
+                    } else {
+                        // V1 응답 처리 - 총점만
+                        resultScore.textContent = `총점: ${response.data.totalScore.toFixed(2)}점`;
+                        detailedScores.style.display = 'none';
+                        
+                        // alert로도 결과 표시 (V1)
+                        alert(`스펙 평가 점수\n총점: ${response.data.totalScore.toFixed(2)}점`);
+                    }
+                    
+                    resultSection.style.display = 'block';
+                } catch (error) {
+                    // 에러 처리
+                    console.error('Error:', error);
+                    const errorMessage = document.getElementById('errorMessage');
+                    errorMessage.textContent = error.response?.data?.message || '평가 중 오류가 발생했습니다.';
+                    errorMessage.style.display = 'block';
+                } finally {
+                    // 제출 버튼 상태 복원
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalText;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

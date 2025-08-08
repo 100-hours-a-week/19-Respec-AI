@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+models/
+*.pth
+*.log
+resume_analysis_*.html
+uploaded_files/
+temp/
+
+# OS specific
+.DS_Store
+Thumbs.db
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+tmp/
+uploads/
+
+# EasyOCR Models
+craft_mlt_25k.pth
+korean_g2.pth
+english_g2.pth 

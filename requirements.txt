@@ -1,24 +1,12 @@
-# 웹 프레임워크
 fastapi==0.104.1
-uvicorn==0.23.2
-
-# 데이터 처리 및 AI 모델
-torch==2.0.1
-transformers==4.34.0
-numpy==1.24.3
-sentencepiece==0.2.0
-protobuf==6.30.2
-
-# 유틸리티
-tqdm==4.66.1
-pydantic==2.4.2
-python-dateutil==2.8.2
-
-# 캐싱 및 데이터베이스
-redis==5.0.1
-
-# 비동기 처리
-# concurrent.futures는 Python 표준 라이브러리이므로 별도 설치 불필요
-
-# CORS 지원
-# CORSMiddleware는 fastapi의 일부이므로 별도 설치 불필요
+uvicorn==0.24.0
+python-multipart==0.0.6
+easyocr==1.7.1
+PyPDF2==3.0.1
+numpy==1.26.2
+python-dotenv==1.0.0
+jinja2==3.1.2
+PyMuPDF==1.23.8
+torch==2.7.0
+torchvision==0.22.0 
+boto3==1.34.0

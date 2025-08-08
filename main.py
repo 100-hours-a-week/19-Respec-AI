@@ -1,164 +1,499 @@
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse,JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-import os, time, redis    
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, validator, field_validator
+from urllib.parse import urlparse
+from resume_evaluation_system import ResumeEvaluationSystem
+from model import OCRModel
+import time
+import re
+import os
 import uvicorn
-from datetime import datetime
-from model import SpecEvaluator
-from batch_processing import BatchProcessor
+import requests
+import logging
+
+# 로깅 설정 개선
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# 필요한 디렉토리 생성
+REQUIRED_DIRS = ['static', 'templates']
+for dir_name in REQUIRED_DIRS:
+    if not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+        logger.info(f"Created directory: {dir_name}")
+
 # FastAPI 애플리케이션 인스턴스 생성
 app = FastAPI(title="Spec Score API")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="/templates")
 
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 모든 오리진 허용 (프로덕션에서는 제한 필요)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Redis 환경 변수 설정
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").lower() == "true"
+# 평가 시스템 초기화
+evaluation_system = ResumeEvaluationSystem()
 
-# 캐시 TTL 설정 (24시간)
-CACHE_TTL = 86400
-
-# 모델 초기화
-evaluator = SpecEvaluator(
-    use_redis=REDIS_ENABLED,
-    redis_host=REDIS_HOST,
-    redis_port=REDIS_PORT,
-    redis_db=REDIS_DB,
-    cache_ttl=CACHE_TTL
-)
-
-batch_processor = BatchProcessor(evaluator, batch_size=10, max_workers=4)
-
-# Redis 클라이언트 초기화 (포트폴리오 텍스트 캐싱용)
-redis_client = None
-if REDIS_ENABLED:
-    try:
-        redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB + 1,  # 모델 캐시와 다른 DB 사용
-            decode_responses=True
-        )
-        print("Redis 포트폴리오 캐시 연결 성공")
-    except Exception as e:
-        print(f"Redis 포트폴리오 캐시 연결 실패: {e}")
-        redis_client = None
+# OCR 모델 초기화
+ocr_model = OCRModel()
+def get_ocr_model():
+    global ocr_model
+    if ocr_model is None:
+        ocr_model = OCRModel()
+    return ocr_model
 
 # ──────────────────────────
-# 1) Pydantic 모델 정의
+# Pydantic 모델 정의
 # ──────────────────────────
 class University(BaseModel):
-    # 학교 이름
     school_name: str
-    # 학위 (Optional)
-    degree: Optional[str]
-    # 전공 (Optional)
-    major: Optional[str]
-    # 평점 (Optional)
-    gpa: Optional[float]
-    # 평점 최대값 (Optional)
-    gpa_max: Optional[float]
+    degree: Optional[str] = None
+    major: Optional[str] = None
+    gpa: Optional[float] = None
+    gpa_max: Optional[float] = None
 
 class Career(BaseModel):
-    # 회사 이름
     company: str
-    # 직책/역할 (Optional)
-    role: Optional[str]
-    # 근무 개월 (Optional)
-    work_month: Optional[int]
+    role: Optional[str] = None
+    work_month: Optional[int] = None
 
 class Language(BaseModel):
-    # 시험 종류 (예: TOEIC, TOEFL 등)
     test: str
-    # 점수 또는 등급
     score_or_grade: str
 
 class Activity(BaseModel):
-    # 활동 이름
     name: str
-    # 역할 (Optional)
-    role: Optional[str]
-    # 수상 내역 (Optional)
-    award: Optional[str]
+    role: Optional[str] = None
+    award: Optional[str] = None
 
-class SpecV1(BaseModel):
-    # 지원자 닉네임
+class ResumeData(BaseModel):
     nickname: str
-    # 최종 학력
     final_edu: str
-    # 학력 상태 (예: 졸업, 재학 등)
     final_status: str
-    # 지원 직종
     desired_job: str
-    # 대학 정보 리스트
-    universities: Optional[List[University]]  = []
-    # 경력 정보 리스트
-    careers:     Optional[List[Career]]      = []
-    # 자격증 리스트
-    certificates: Optional[List[str]]        = []
-    # 어학 정보 리스트
-    languages:   Optional[List[Language]]    = []
-    # 활동 정보 리스트
-    activities:  Optional[List[Activity]]    = []
+    universities: Optional[List[University]] = []
+    careers: Optional[List[Career]] = []
+    certificates: Optional[List[str]] = []
+    languages: Optional[List[Language]] = []
+    activities: Optional[List[Activity]] = []
 
-class SpecV1Respone(BaseModel):
-    # 지원자 닉네임
-    nickname: str 
-    # 총점
+class ResumeScore(BaseModel):
+    nickname: str
+    academicScore: float
+    workExperienceScore: float
+    certificationScore: float
+    languageProficiencyScore: float
+    extracurricularScore: float
     totalScore: float
+    assessment: str
 
 class ErrorResponse(BaseModel):
-    # 오류 메시지
-    message: str = Field
+    message: str
+
+# S3 URL 요청을 위한 새로운 모델
+class S3URLRequest(BaseModel):
+    filelink: str = Field(..., description="S3에 저장된 PDF 파일의 URL")
+    
+    @field_validator('filelink')
+    def validate_filelink(cls, v):
+        if not v or not v.strip():
+            raise ValueError("URL이 비어있습니다.")
+        
+        url = v.strip()
+        
+        # URL 형식 검증
+        try:
+            parsed = urlparse(url)
+            if not parsed.scheme or not parsed.netloc:
+                raise ValueError("유효한 URL 형식이 아닙니다.")
+        except Exception:
+            raise ValueError("URL 형식이 올바르지 않습니다.")
+        
+        # 파일 확장자 검증
+        if not url.lower().endswith('.pdf'):
+            raise ValueError("PDF 파일만 지원됩니다.")
+        
+        return url
+    
+class ResumeAnalysisResponse(BaseModel):
+    success: bool = True
+    message: str = "분석이 완료되었습니다."
+    processing_time: float = 0.0
+    data: Dict[str, Any] = {}
 # ──────────────────────────
-# 2) 점수 계산 함수
+# 유틸리티 함수
 # ──────────────────────────
-@app.post(
-        "/spec/v1/post", 
-    response_model=SpecV1Respone,
-    responses={
-        400: {"model": ErrorResponse},
-        500: {"model": ErrorResponse}
-    },
-    tags=["스펙 평가"]
-)
-async def evaluate_spec_v1(spec_data: SpecV1):
-    """
-    V1 API: 사용자의 학력, 경력, 자격증 등의 스펙 정보를 받아 평가합니다.
-    """
+def is_valid_url(url: str) -> bool:
+    """URL 유효성 검증"""
     try:
-        # 요청 시간 기록
-        start_time = time.time()
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
+
+def is_pdf_url(url: str) -> bool:
+    """PDF URL인지 확인"""
+    return url.lower().endswith('.pdf') or 'pdf' in url.lower()
+
+async def download_pdf_from_url(url: str) -> bytes:
+    """URL에서 PDF 파일 다운로드"""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
         
-        # SpecEvaluator를 사용하여 평가
-        result = evaluator.predict(spec_data.dict())
+        # Content-Type 확인
+        content_type = response.headers.get('content-type', '').lower()
+        if 'pdf' not in content_type and not is_pdf_url(url):
+            raise HTTPException(status_code=400, detail="PDF 파일이 아닙니다.")
         
-        # 응답 시간 계산 및 로깅
-        elapsed_time = time.time() - start_time
-        print(f"[V1] {spec_data.nickname}의 평가 완료, 소요 시간: {elapsed_time:.2f}초")
-        
-        return result
-    except Exception as e:
-        # 오류 로깅
-        print(f"[V1] 평가 오류: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"서버에서 예기치 못한 오류가 발생했습니다: {str(e)}"
-        )
+        return response.content
+    except requests.RequestException as e:
+        logger.error(f"PDF 다운로드 실패: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"PDF 다운로드 실패: {str(e)}")
 
 # ──────────────────────────
-# 3) 서버 실행
+# 라우트 정의
 # ──────────────────────────
-if __name__ == "__main__":
-    # 개발 모드로 실행 (reload=True)
-    uvicorn.run("test:app", host="0.0.0.0", port=8000, reload=True)
+@app.get("/yuju/dev", response_class=HTMLResponse)
+async def get_test_page(request: Request):
+    with open("./templates/spec_test.html", "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
+
+@app.get("/jenna/dev", response_class=HTMLResponse)
+async def read_root(request: Request):
+    """메인 페이지"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.post("/ocrspec")
+async def analyze_resume_from_url(request: S3URLRequest):
+    """이력서 PDF 분석 (URL 기반) - 개선된 버전"""
+    start_time = time.time()
+    
+    try:
+        logger.info(f"=== 이력서 분석 시작 ===")
+        logger.info(f"요청 URL: {request.filelink}")
+        
+        s3_url = request.filelink.strip()
+        
+        # URL 접근성 검증
+        if not await validate_url_accessibility(s3_url):
+            raise HTTPException(
+                status_code=400, 
+                detail="URL에 접근할 수 없습니다. 파일이 공개되어 있는지 확인해주세요."
+            )
+        
+        # OCR 모델 가져오기
+        ocr_model = get_ocr_model()
+        
+        # PDF 처리 및 텍스트 추출
+        logger.info("PDF 텍스트 추출 시작...")
+        results = ocr_model.process_pdf_from_url(s3_url)
+        
+        if not results:
+            raise HTTPException(
+                status_code=400, 
+                detail="PDF에서 텍스트를 추출할 수 없습니다. 파일이 손상되었거나 이미지가 아닌 텍스트가 없을 수 있습니다."
+            )
+        
+        logger.info(f"추출된 텍스트 라인 수: {len(results)}")
+        
+        # 구조화된 데이터로 파싱
+        logger.info("구조화된 데이터 파싱 시작...")
+        structured_data = ocr_model.parse_resume(results)
+        
+        # 응답 데이터 구성
+        response_data = await build_response_data(structured_data)
+        
+        logger.info(f"분석 완료 (소요시간: {time.time() - start_time:.2f}초)")
+        
+        return response_data  # 래핑 없이 바로 반환
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"이력서 분석 중 오류 발생: {error_msg}")
+        if "credentials" in error_msg.lower() or "access denied" in error_msg.lower():
+            detail = "파일에 접근할 수 없습니다. 파일이 공개되어 있는지 확인해주세요."
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            detail = "파일을 찾을 수 없습니다. URL을 확인해주세요."
+        elif "timeout" in error_msg.lower():
+            detail = "요청 시간이 초과되었습니다. 다시 시도해주세요."
+        elif "connection" in error_msg.lower():
+            detail = "네트워크 연결에 실패했습니다. 인터넷 연결을 확인해주세요."
+        else:
+            detail = f"처리 중 오류가 발생했습니다: {error_msg}"
+        raise HTTPException(status_code=500, detail=detail)
+
+async def validate_url_accessibility(url: str) -> bool:
+    """URL 접근성 검증"""
+    try:
+        # HEAD 요청으로 파일 존재 여부 확인
+        response = requests.head(url, timeout=10, allow_redirects=True)
+        return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"URL 접근성 검증 실패: {e}")
+        return True  # 검증 실패 시에도 진행 허용
+
+async def build_response_data(structured_data: Dict) -> Dict[str, Any]:
+    """응답 데이터 구성"""
+    # 최종학력 정보를 universities에서 추출
+    final_edu = "고등학교"  # 기본값
+    final_status = "졸업"   # 기본값
+    
+    universities = structured_data.get("universities", [])
+    if universities:
+        latest_uni = universities[0]  # 가장 최근 학력
+        degree = latest_uni.get("degree", "")
+        if "대학교" in latest_uni.get("school_name", ""):
+            final_edu = "대학교"
+        elif "대학원" in latest_uni.get("school_name", ""):
+            final_edu = "대학원"
+        final_status = latest_uni.get("status", "졸업")
+    
+    response_data = {
+        "final_edu": final_edu,
+        "final_status": final_status,
+        "desired_job": structured_data.get("desired_job", ""),
+        "universities": [],
+        "careers": [],
+        "certificates": [],
+        "languages": [],
+        "activities": []
+    }
+    
+    # 대학교 정보 변환 - status 필드 제거
+    for university in structured_data.get("universities", []):
+        university_info = {
+            "school_name": university.get("school_name", ""),
+            "degree": university.get("degree", ""),
+            "major": university.get("major", ""),
+            "gpa": university.get("gpa", 0.0),
+            "gpa_max": university.get("gpa_max", 4.5)
+        }
+        response_data["universities"].append(university_info)
+    
+    # 경력 정보 변환 - company, role, work_month만 포함
+    for career in structured_data.get("careers", []):
+        career_info = {
+            "company": career.get("company", ""),
+            "role": career.get("role", ""),
+            "work_month": career.get("work_month", 0)
+        }
+        response_data["careers"].append(career_info)
+    
+    # 자격증 정보 변환 - 제목만 추출
+    for certificate in structured_data.get("certificates", []):
+        cert_name = re.sub(r'\s*\([^)]*\)', '', certificate).strip()
+        if cert_name:
+            response_data["certificates"].append(cert_name)
+    
+    # 어학 정보 변환 - test, score_or_grade만 포함
+    for language in structured_data.get("languages", []):
+        language_info = {}
+        
+        # test가 빈 문자열이 아니면 추가
+        test = language.get("test", "")
+        if test:
+            language_info["test"] = test
+        
+        # score_or_grade가 빈 문자열이 아니면 추가
+        score_or_grade = language.get("score_or_grade", "")
+        if score_or_grade:
+            language_info["score_or_grade"] = score_or_grade
+        
+        # 최소한 하나의 필드라도 있으면 추가
+        if language_info:
+            response_data["languages"].append(language_info)
+    
+    # 활동 정보 변환 - name, role, award가 없으면 빈 문자열로 포함
+    unique_activities = []  # 중복 제거를 위한 리스트
+    for activity in structured_data.get("activities", []):
+        activity_name = activity.get("name", "")
+        activity_name = re.sub(r'\s*\([^)]*\)', '', activity_name).strip()
+        # 중복 확인
+        if not activity_name or activity_name in unique_activities:
+            continue
+        unique_activities.append(activity_name)
+        activity_info = {
+            "name": activity_name if activity_name else ""
+        }
+        # role, award가 없으면 빈 문자열로 포함
+        role = activity.get("role", "")
+        award = activity.get("award", "")
+        activity_info["role"] = role.strip() if role else ""
+        activity_info["award"] = award.strip() if award else ""
+        response_data["activities"].append(activity_info)
+    
+    # 최종 응답
+    return response_data
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """422 에러 핸들러 개선"""
+    logger.error(f"Validation error: {exc}")
+    
+    # 요청 본문 로깅
+    try:
+        body = await request.body()
+        logger.error(f"Request body: {body.decode()}")
+    except:
+        logger.error("Request body could not be read")
+    
+    # 더 친화적인 에러 메시지
+    error_details = []
+    for error in exc.errors():
+        field = error.get("loc", ["unknown"])[-1]
+        message = error.get("msg", "Validation error")
+        error_details.append(f"{field}: {message}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "message": "입력 데이터가 올바르지 않습니다.",
+            "details": error_details,
+            "processing_time": 0.0,
+            "data": {}
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """일반 예외 핸들러"""
+    logger.error(f"Unexpected error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": "서버 내부 오류가 발생했습니다.",
+            "processing_time": 0.0,
+            "data": {}
+        }
+    )
+
+@app.post("/spec/v2/post")
+async def evaluate_resume_v2(resume_data: ResumeData):
+    """이력서 평가 엔드포인트 V2 - 세부 항목 점수 포함"""
+    start_time = time.time()  # 시작 시간 측정
+    
+    try:
+        # 입력 데이터 검증
+        if not resume_data.nickname:
+            raise HTTPException(status_code=400, detail="닉네임은 필수입니다.")
+        if not resume_data.desired_job:
+            raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
+            
+        logger.info(f"🔍 평가 시작 (V2): {resume_data.nickname} ({resume_data.desired_job})")
+        
+        # 평가 실행 및 결과 반환
+        result = evaluation_system.evaluate_resume(resume_data.dict())
+        
+        # 응답 시간 계산
+        processing_time = time.time() - start_time
+        
+        logger.info(f"✅ 평가 완료 (V2): {resume_data.nickname} -> {result.get('totalScore')}점 (처리시간: {processing_time:.3f}초)")
+        
+        assessment = result.get('assessment', '')
+        keywords = ['totalscore', 'assessment', '실제 조언 내용']
+        if any(keyword in assessment for keyword in keywords):
+            assessment = '조언생성 실패'
+        
+        return {
+            "nickname": result["nickname"],
+            "totalScore": result['totalScore'],
+            "academicScore": result.get('academicScore', 0.0),
+            "workExperienceScore": result.get('workExperienceScore', 0.0),
+            "certificationScore": result.get('certificationScore', 0.0),
+            "languageProficiencyScore": result.get('languageProficiencyScore', 0.0),
+            "extracurricularScore": result.get('extracurricularScore', 0.0),
+            "assessment": assessment,
+        }
+    except Exception as e:
+        # 에러 발생 시에도 처리 시간 계산
+        processing_time = time.time() - start_time
+        error_msg = f"평가 중 오류 발생: {str(e)}"
+        logger.error(f"❌ {error_msg} (처리시간: {processing_time:.3f}초)")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/spec/v1/post")
+async def evaluate_resume_v1(resume_data: ResumeData):
+    """이력서 평가 엔드포인트 V1 - 총점만 반환"""
+    start_time = time.time()  # 시작 시간 측정
+    
+    try:
+        # 입력 데이터 검증
+        if not resume_data.nickname:
+            raise HTTPException(status_code=400, detail="닉네임은 필수입니다.")
+        if not resume_data.desired_job:
+            raise HTTPException(status_code=400, detail="지원직종은 필수입니다.")
+            
+        logger.info(f"🔍 평가 시작 (V1): {resume_data.nickname} ({resume_data.desired_job})")
+        
+        # 평가 실행 및 결과 반환
+        result = evaluation_system.evaluate_resume(resume_data.dict())
+        
+        # 응답 시간 계산
+        processing_time = time.time() - start_time
+        
+        logger.info(f"✅ 평가 완료 (V1): {resume_data.nickname} -> {result.get('totalScore')}점 (처리시간: {processing_time:.3f}초)")
+        
+        return {
+            "nickname": result["nickname"],
+            "totalScore": result['totalScore'],
+            "processing_time": round(processing_time, 3)  # 소수점 3자리까지 반올림
+        }
+    except Exception as e:
+        # 에러 발생 시에도 처리 시간 계산
+        processing_time = time.time() - start_time
+        error_msg = f"평가 중 오류 발생: {str(e)}"
+        logger.error(f"❌ {error_msg} (처리시간: {processing_time:.3f}초)")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/status")
+async def get_system_status():
+    """시스템 상태 확인 엔드포인트"""
+    try:
+        return evaluation_system.get_system_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/yuju/test")
+async def test_spec_v2_endpoint():
+    """스펙 평가 V2 엔드포인트 자동 테스트"""
+    try:
+        # testcode.py를 런타임에 import (순환 참조 방지)
+        from testcode import run_spec_v2_tests
+        
+        print("🚀 /docs/test 엔드포인트 호출됨")
+        test_results = await run_spec_v2_tests(evaluation_system)
+        print(f"✅ 테스트 완료: {test_results.get('overall_status')}")
+        
+        return test_results
+    except Exception as e:
+        print(f"❌ 테스트 시스템 오류: {str(e)}")
+        return {
+            "test_name": "Spec V2 Endpoint Test Suite",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "overall_status": "SYSTEM_ERROR",
+            "error_message": f"테스트 시스템 오류: {str(e)}",
+            "total_tests": 0,
+            "passed_tests": 0,
+            "failed_tests": 0,
+            "test_cases": []
+        }
